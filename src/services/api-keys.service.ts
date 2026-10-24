@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.ts';
 import { type ApiKeyRow, apiKeys } from '../db/schema.ts';
 import { generateApiKey, hashApiKey, isWellFormedApiKey } from '../lib/api-key.ts';
@@ -83,10 +83,16 @@ export async function authenticate(token: string): Promise<AuthenticatedKey | nu
     .limit(1);
   if (!key) return null;
 
-  // Fire-and-forget: bookkeeping must not add latency to (or fail) the request.
+  // Fire-and-forget: bookkeeping must not add latency to (or fail) the request. Throttled to
+  // once a minute so concurrent requests with one key don't queue on the row lock.
   db.update(apiKeys)
     .set({ lastUsedAt: sql`now()` })
-    .where(eq(apiKeys.id, key.id))
+    .where(
+      and(
+        eq(apiKeys.id, key.id),
+        or(isNull(apiKeys.lastUsedAt), lt(apiKeys.lastUsedAt, sql`now() - interval '1 minute'`)),
+      ),
+    )
     .catch((err: unknown) => {
       logger.warn({ err, apiKeyId: key.id }, 'Failed to update api_keys.last_used_at');
     });

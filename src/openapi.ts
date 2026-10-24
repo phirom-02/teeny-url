@@ -21,7 +21,7 @@ const DESCRIPTION = `
 A tiny URL shortener: create short links, follow them, and see who clicks.
 
 ## Authentication
-Every \`/api/*\` endpoint requires an API key. Create one on the server with:
+Every \`/api/links\` endpoint requires an API key. Create one on the server with:
 
 \`\`\`sh
 pnpm key:create <name>
@@ -83,7 +83,7 @@ const responses = {
   unauthorized: error(
     'Missing, malformed, unknown or revoked API key',
     'UNAUTHORIZED',
-    'Invalid API key',
+    'Invalid or revoked API key',
   ),
   linkNotFound: error(
     'No link with this code exists for your API key',
@@ -162,7 +162,11 @@ function buildRegistry(): OpenAPIRegistry {
       201: json('The created link', Link),
       400: responses.validation,
       401: responses.unauthorized,
-      409: error('The alias is already in use', 'ALIAS_TAKEN', 'Alias is already taken'),
+      409: error(
+        'The alias is already in use',
+        'ALIAS_TAKEN',
+        'Alias "launch-day" is already taken',
+      ),
       413: error('The request body exceeds 16 kB', 'PAYLOAD_TOO_LARGE', 'Request body too large'),
       429: responses.rateLimited,
     },
@@ -247,7 +251,7 @@ function buildRegistry(): OpenAPIRegistry {
     operationId: 'followLink',
     summary: 'Follow a short link',
     description:
-      'Redirects (302) to the target URL with `Cache-Control: no-store`; every GET is counted as a click.',
+      'Redirects (302) to the target URL with `Cache-Control: no-store`; every GET is counted as a click (HEAD is not).',
     request: { params: CodeParams },
     responses: {
       302: {
@@ -264,6 +268,7 @@ function buildRegistry(): OpenAPIRegistry {
         },
       },
       404: error('No link with this code exists', 'NOT_FOUND', 'Link not found'),
+      429: responses.rateLimited,
     },
   });
 

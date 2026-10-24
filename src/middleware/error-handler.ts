@@ -54,6 +54,8 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
 
   const clientError = toClientError(err);
   if (clientError) {
+    // Server-side AppErrors (e.g. INTERNAL_ERROR) still need a log line with the cause.
+    if (clientError.status >= 500) (req.log ?? logger).error({ err }, clientError.message);
     const body: ErrorResponse = {
       error: {
         code: clientError.code,

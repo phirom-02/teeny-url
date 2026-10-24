@@ -17,6 +17,36 @@ describe('GET /', () => {
 
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
+
+  it('exposes the documented response headers to browser clients', async () => {
+    const res = await api().get('/').set('Origin', 'https://app.example.com');
+
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+    const exposed = String(res.headers['access-control-expose-headers']).split(',');
+    expect(exposed).toEqual(
+      expect.arrayContaining(['Location', 'X-Request-Id', 'RateLimit', 'Retry-After']),
+    );
+  });
+});
+
+describe('X-Request-Id', () => {
+  it('generates a request id when none is sent', async () => {
+    const res = await api().get('/');
+
+    expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('echoes a well-formed incoming request id', async () => {
+    const res = await api().get('/').set('X-Request-Id', 'trace-abc.123');
+
+    expect(res.headers['x-request-id']).toBe('trace-abc.123');
+  });
+
+  it('replaces a malformed incoming request id', async () => {
+    const res = await api().get('/').set('X-Request-Id', 'bad id with spaces');
+
+    expect(res.headers['x-request-id']).not.toBe('bad id with spaces');
+  });
 });
 
 describe('GET /health', () => {

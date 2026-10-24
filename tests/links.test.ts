@@ -127,6 +127,18 @@ describe('POST /api/links', () => {
       expectError(res, 409, 'ALIAS_TAKEN');
     });
 
+    it('lets exactly one of two concurrent creates claim an alias', async () => {
+      const a = await createTestKey('a');
+      const b = await createTestKey('b');
+
+      const results = await Promise.all([
+        api().post('/api/links').set(a.auth).send({ url: TARGET, alias: 'race' }),
+        api().post('/api/links').set(b.auth).send({ url: TARGET, alias: 'race' }),
+      ]);
+
+      expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    });
+
     it.each(['api', 'docs', 'health', 'openapi', 'admin', 'static', 'API', 'Docs', 'HeAlTh'])(
       'rejects the reserved alias %s',
       async (alias) => {
@@ -212,15 +224,37 @@ describe('POST /api/links', () => {
       expectValidationError(res);
     });
 
-    it.each([`${BASE_URL}/abc1234`, `${BASE_URL}/`, `${BASE_URL}/api/links`])(
-      'rejects a self-referential URL (%s)',
+    it.each([
+      `${BASE_URL}/abc1234`,
+      `${BASE_URL}/`,
+      `${BASE_URL}/api/links`,
+      // Other spellings of the same loopback origin (BASE_URL is http://localhost:3000).
+      'http://LOCALHOST:3000/x',
+      'http://localhost.:3000/x',
+      'http://evil@localhost:3000/x',
+      'http://127.0.0.1:3000/x',
+      'http://127.1.2.3:3000/x',
+      'http://2130706433:3000/x',
+      'http://[::1]:3000/x',
+      'http://0.0.0.0:3000/x',
+      'http://app.localhost:3000/x',
+    ])('rejects a self-referential URL (%s)', async (url) => {
+      const { auth } = await createTestKey();
+
+      const res = await api().post('/api/links').set(auth).send({ url });
+
+      const details = expectValidationError(res);
+      expect(details.map((d) => d.path)).toContain('url');
+    });
+
+    it.each(['http://localhost:3001/x', 'http://127.0.0.1:8080/x'])(
+      'accepts a loopback URL on a different port (%s)',
       async (url) => {
         const { auth } = await createTestKey();
 
         const res = await api().post('/api/links').set(auth).send({ url });
 
-        const details = expectValidationError(res);
-        expect(details.map((d) => d.path)).toContain('url');
+        expect(res.status).toBe(201);
       },
     );
 

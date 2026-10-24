@@ -15,7 +15,7 @@ export const LinkStats = z
       .array(z.object({ date: z.iso.date(), clicks: z.number().int() }))
       .meta({ description: `Last ${STATS_DAYS} days (UTC), oldest first, zero-filled` }),
     topReferrers: z.array(z.object({ referrer: z.string(), clicks: z.number().int() })).meta({
-      description: `Top ${TOP_REFERRERS_LIMIT} referrers; "${DIRECT_REFERRER}" = no referrer`,
+      description: `Top ${TOP_REFERRERS_LIMIT} referrers (all time); "${DIRECT_REFERRER}" = no referrer`,
     }),
   })
   .meta({ id: 'LinkStats' });
