@@ -14,11 +14,12 @@ import type { RootResponse } from './schemas/common.ts';
 
 export function createApp() {
   const app = express();
+  app.disable('x-powered-by');
 
-  app.use(httpLogger);
-  app.use(helmet());
+  app.use(httpLogger); // first, so every response (errors included) gets an X-Request-Id
+  app.use(helmet()); // strict default CSP; /docs swaps in its own (see docs.routes.ts)
   app.use(cors());
-  app.use(express.json({ limit: '16kb' }));
+  app.use(express.json({ limit: '16kb' })); // larger bodies → 413 PAYLOAD_TOO_LARGE
 
   app.get('/', (_req, res) => {
     const body: RootResponse = { name: 'Teeny-URL', version: pkg.version, docs: '/docs' };
