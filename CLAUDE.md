@@ -2,6 +2,9 @@
 
 URL shortener API. Express 5 + TypeScript on Node 24 (native type stripping — no build step), PostgreSQL 17 (Docker) via Drizzle ORM, zod contracts, OpenAPI docs at `/docs`.
 
+## Cloud-native learning path (LocalStack)
+The owner is also using this project to learn cloud-native engineering (containers, Kubernetes, Terraform, observability, GitOps, security, resilience) with the LocalStack Student plan. For anything about cloud, AWS, LocalStack, Docker images, Kubernetes, Terraform, OpenTelemetry, Argo CD, or "next stage", read `learning/ROADMAP.md` first. It holds the stage plan, current progress, open decisions and the rules for working through it (coach mode, one branch per stage, no real cloud or non-local cluster outside the capstone).
+
 ## Commands
 | Task | Command |
 |---|---|
