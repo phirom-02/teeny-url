@@ -32,6 +32,26 @@ export interface UiEcho {
   bodyConsumed: boolean;
 }
 
+/**
+ * The client-identity headers the UI stub received. adapter-node reads these (`ADDRESS_HEADER`,
+ * `PROTOCOL_HEADER`), so Express must have overwritten them with what it resolved; `null` = absent.
+ */
+export interface UiForwardedHeaders {
+  'x-forwarded-for': string | null;
+  'x-forwarded-proto': string | null;
+}
+
+/** The JSON document the UI stub embeds in its page. */
+interface UiStubPage {
+  echo: UiEcho;
+  forwarded: UiForwardedHeaders;
+}
+
+function headerValue(value: string | string[] | undefined): string | null {
+  if (value === undefined) return null;
+  return Array.isArray(value) ? value.join(', ') : value;
+}
+
 /** Marker embedded in every page the UI stub renders. */
 export const UI_STUB_MARKER = 'teeny-ui-stub';
 
@@ -43,12 +63,19 @@ const UI_ECHO_PATTERN = new RegExp(
 /**
  * Stand-in for SvelteKit's adapter-node handler (not a mock of our code). Like SvelteKit, it reads
  * the raw request body from the stream itself, then answers `200 text/html` with a page echoing the
- * method, original URL and body. It sets no CSP header: SvelteKit sets its own.
+ * method, original URL and body, plus the `X-Forwarded-For` / `-Proto` headers it was handed. It
+ * sets no CSP header: SvelteKit sets its own.
  */
 export const uiStub: RequestHandler = (req, res) => {
   const reply = (body: string, bodyConsumed: boolean) => {
-    const echo: UiEcho = { method: req.method, url: req.originalUrl, body, bodyConsumed };
-    const json = JSON.stringify(echo).replaceAll('<', '\\u003c');
+    const page: UiStubPage = {
+      echo: { method: req.method, url: req.originalUrl, body, bodyConsumed },
+      forwarded: {
+        'x-forwarded-for': headerValue(req.headers['x-forwarded-for']),
+        'x-forwarded-proto': headerValue(req.headers['x-forwarded-proto']),
+      },
+    };
+    const json = JSON.stringify(page).replaceAll('<', '\\u003c');
     res
       .status(200)
       .type('html')
@@ -75,8 +102,7 @@ export function apiWithUi() {
   return supertest(uiApp);
 }
 
-/** Asserts the response was rendered by the UI stub and returns what the stub received. */
-export function expectUi(res: supertest.Response): UiEcho {
+function readUiStubPage(res: supertest.Response): UiStubPage {
   expect(res.status, `expected the UI stub, got: ${res.text?.slice(0, 300)}`).toBe(200);
   expect(res.headers['content-type']).toMatch(/text\/html/);
   const match = UI_ECHO_PATTERN.exec(res.text ?? '');
@@ -84,7 +110,17 @@ export function expectUi(res: supertest.Response): UiEcho {
     match,
     `response was not rendered by the UI stub: ${res.text?.slice(0, 300)}`,
   ).not.toBeNull();
-  return JSON.parse(match?.[1] ?? '{}') as UiEcho;
+  return JSON.parse(match?.[1] ?? '{}') as UiStubPage;
+}
+
+/** Asserts the response was rendered by the UI stub and returns what the stub received. */
+export function expectUi(res: supertest.Response): UiEcho {
+  return readUiStubPage(res).echo;
+}
+
+/** Asserts the response was rendered by the UI stub and returns the forwarded headers it saw. */
+export function expectUiForwarded(res: supertest.Response): UiForwardedHeaders {
+  return readUiStubPage(res).forwarded;
 }
 
 /** `Accept` headers of real browser page navigations. */

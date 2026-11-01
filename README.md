@@ -63,11 +63,11 @@ The UI is a SvelteKit app in `web/` that renders every page on the server. It is
 
 | Topic | Behavior |
 |---|---|
-| Session | The API key itself, in the `httpOnly` cookie `teeny_key` (`SameSite=Lax`, `Secure` over https, kept for 30 days). Page scripts can't read it, and the key is never echoed into a page. There is no server-side session store |
+| Session | The API key itself, in the `httpOnly` cookie `teeny_key` (`SameSite=Lax`, `Secure` over https, kept for 30 days). Page scripts can't read it, and the key is never echoed into a page. There is no server-side session store, so **Sign out only removes the cookie from that browser — the key itself stays valid**. If a device with a signed-in session is lost, revoke the key (`pnpm key:revoke`) |
 | Key checks | On every request the UI resolves the cookie with `GET /api/me`. A revoked or unknown key clears the cookie, which signs the visitor out. The UI's API calls count against that visitor's `/api/*` rate limit |
 | Without JavaScript | Every form is a plain HTML `POST` (SvelteKit form actions), progressively enhanced when JS runs. Only the Copy button needs JS, and it is hidden without it |
 | Security | Nonce-based CSP (`script-src 'self'` + nonce, `style-src 'self'`, `frame-ancestors 'none'`). SvelteKit rejects cross-site form posts with `403`. Signed-in pages are sent with `Cache-Control: private, no-store` |
-| Client IP | Before the UI runs, Express sets `X-Forwarded-For` to the client IP it resolved. The UI forwards it on its loopback API calls, and the API trusts loopback proxies (`trust proxy` = `loopback`), so each visitor keeps their own rate-limit bucket |
+| Client IP | Before the UI runs, Express sets `X-Forwarded-For` to the client IP it resolved. The UI forwards it on its loopback API calls, and the API trusts loopback proxies (`trust proxy` = `loopback` + `TRUST_PROXY`), so each visitor keeps their own rate-limit bucket. Behind a reverse proxy on another host, add it to `TRUST_PROXY` — otherwise form posts fail the origin check (403) and everyone shares one bucket |
 
 Under `pnpm dev`, the "API docs" link and the short-link host shown next to the alias field point at `API_ORIGIN` (the API on :3000), because Vite serves the UI on :5173.
 
@@ -262,6 +262,12 @@ Express matches requests in this order:
 
 Without the UI mounted (`SERVE_UI=false`, or `web/build` missing), everything that would go to the UI gets a JSON `404`, and `GET /` returns the service info.
 
+**Upgrading from the API-only version:** the service info moved from `GET /` to `GET /api` (with the UI mounted, `GET /` is the web app and redirects signed-out visitors to `/login`), and `login`, `logout`, `links`, `settings`, `account` and `_app` became reserved words. An existing link whose code matches one of them (in any case) stops redirecting; find them with:
+
+```sh
+docker exec teeny-url-postgres psql -U teeny -d teeny_url -c "SELECT code FROM links WHERE lower(code) IN ('login','logout','links','settings','account','_app');"
+```
+
 ### Rules
 
 | Topic | Behavior |
@@ -274,7 +280,7 @@ Without the UI mounted (`SERVE_UI=false`, or `web/build` missing), everything th
 | Click data | Referrer: lowercased hostname only, with no path or query; `direct` when there is no `Referer`. User agent: truncated to 512 characters |
 | Stats | `clicksByDay` covers the last 30 UTC days including today, oldest first, with zeros for days without clicks. `topReferrers` lists the top 5 by clicks |
 | Ownership | A link is visible only to the key that created it. Other keys get `404` (not `403`). Revoking a key does not delete its links, which keep redirecting |
-| Rate limit | Per client IP: 120 requests per minute on `/api/*`, and 300 per minute on redirects (`/{code}`), with IETF draft-8 `RateLimit` / `RateLimit-Policy` headers. Going over returns `429` + `Retry-After`. `/health`, `/docs`, `/openapi.json` and UI pages are not limited, but the UI's own API calls count toward the visitor's `/api/*` limit. `trust proxy` is `loopback`: `X-Forwarded-For` is honored only from loopback addresses (`127.0.0.0/8`, `::1`), so behind a reverse proxy on another host all clients share one bucket |
+| Rate limit | Per client IP: 120 requests per minute on `/api/*`, and 300 per minute on redirects (`/{code}`), with IETF draft-8 `RateLimit` / `RateLimit-Policy` headers. Going over returns `429` + `Retry-After`. `/health`, `/docs`, `/openapi.json` and UI pages are not limited, but the UI's own API calls count toward the visitor's `/api/*` limit. `trust proxy` is `loopback` plus anything in `TRUST_PROXY`: `X-Forwarded-For` is honored only from those addresses, so put a reverse proxy that runs on another host into `TRUST_PROXY` |
 | CORS | Open (`*`) on `/api/*` only, exposing `Location`, `X-Request-Id`, `RateLimit`, `RateLimit-Policy` and `Retry-After`. UI pages are not CORS-enabled |
 | Request IDs | Every response has an `X-Request-Id`. An incoming one is reused if it matches `[A-Za-z0-9._:-]{1,128}` |
 
@@ -324,7 +330,10 @@ Copy `.env.example` to `.env`. The API validates its variables with zod at start
 | `NODE_ENV` | `development` | API | `development`: pretty logs through pino-pretty, a dev dependency. `production`: JSON logs. `test`: silent logs and no rate limit |
 | `LOG_LEVEL` | `info` | API | `fatal` · `error` · `warn` · `info` · `debug` · `trace` · `silent` |
 | `SERVE_UI` | `true` | API | `true`/`1`: mount the built UI (`web/build`). `false`/`0`: API only, and `GET /` returns the service info. `pnpm dev` (`dev:api`) always sets `false`. If `web/build` is missing, the server logs a warning and runs API-only |
+| `TRUST_PROXY` | unset | API | Extra trusted reverse proxies, comma-separated: IPs, CIDRs or Express presets (`uniquelocal`, `linklocal`), e.g. `10.0.0.0/8`. Loopback is always trusted. Needed when a proxy on another host terminates TLS: it makes `req.protocol`/`req.ip` (and so the UI's origin check, `Secure` cookies and rate limits) use the proxy's `X-Forwarded-*` headers |
 | `API_ORIGIN` | unset | web UI (server side) | Origin the UI's server code calls the API on (http or https). When unset: `http://127.0.0.1:$PORT` under `pnpm start` (set by `src/server.ts`), `http://localhost:3000` under `pnpm dev`. In dev it also sets the "API docs" link and the short-link host shown in the form |
+
+When it serves the UI, the server pins adapter-node's `ADDRESS_HEADER=x-forwarded-for`, `PROTOCOL_HEADER=x-forwarded-proto` and `XFF_DEPTH=1` (other values are overridden with a warning — configure proxies with `TRUST_PROXY` instead). Don't set adapter-node's `HOST_HEADER` or `PORT_HEADER`: Express doesn't overwrite those, so clients could spoof them. Keep `API_ORIGIN` on loopback, or all UI users share one rate-limit bucket (the server warns).
 
 If you change the Postgres port or credentials, update `DATABASE_URL` to match. Also update `tests/test-env.ts`, which hard-codes `postgres://teeny:teeny@localhost:5432/teeny_url_test`. If you change `PORT`, update `BASE_URL`, and set `API_ORIGIN=http://localhost:<PORT>` for `pnpm dev`.
 
@@ -390,7 +399,8 @@ Before committing, run `pnpm typecheck && pnpm lint && pnpm test`.
 - The suite needs the Postgres container to be running (`pnpm docker:up`). It uses `teeny_url_test` and never touches your dev data.
 - vitest's global setup (`tests/global-setup.ts`) applies migrations to the test database automatically, and `tests/setup.ts` truncates every table before each test.
 - HTTP tests call `createApp()` through supertest, so no server or port is involved. Test files run one at a time because they share the database.
-- UI routing tests (`tests/ui.test.ts`) mount a stub handler with `createApp({ uiHandler })`, so they don't need `pnpm build`. The SvelteKit pages have no automated tests yet; `pnpm typecheck` runs svelte-check over them.
+- UI routing tests (`tests/ui.test.ts`) mount a stub handler with `createApp({ uiHandler })`, so they don't need `pnpm build`.
+- End-to-end tests (`tests/web.e2e.test.ts`) mount the real SvelteKit build and drive sign-in, shorten, sign-out, CSRF, cookies and CSP over HTTP. They are **skipped when `web/build` is missing** — run `pnpm build` first (always after changing `web/`). `pnpm typecheck` runs svelte-check over the pages.
 - `NODE_ENV=test` silences logs and disables the rate limit.
 - If `teeny_url_test` is missing because your Docker volume predates `init.sql`, create it with `docker exec teeny-url-postgres createdb -U teeny teeny_url_test`.
 
@@ -434,7 +444,8 @@ Run agents in parallel only when their file ownership doesn't overlap. To split 
 - Link expiration (`expiresAt`), with expired links no longer redirecting
 - A QR code for each short link
 - Browser tests for the UI (e.g. Playwright)
+- Opaque server-side sessions instead of the API key in the cookie, so signing out (or out everywhere) doesn't require revoking the key
 - Redis cache for hot redirects, with click writes moved off the request path
-- Dockerfile (API + built UI), a compose service and a deployment guide (including `trust proxy` behind a reverse proxy)
+- Dockerfile (API + built UI), a compose service and a deployment guide (including `TRUST_PROXY` behind a reverse proxy)
 - Per-key rate limits and quotas
 - Bulk link creation

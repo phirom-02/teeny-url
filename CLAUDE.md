@@ -33,7 +33,7 @@ URL shortener: JSON API + server-rendered web UI.
 - **Ownership:** every `/api/links*` query filters by the caller's key id; other keys' links are 404.
 - **Redirects:** `302` + `Cache-Control: no-store`; click insert + counter increment happen in one transaction.
 - **Routing:** JSON parsing, CORS and `jsonCsp` are scoped to `/api`, and `/api/*` never reaches the UI. Unknown code → JSON 404 when `Accept` prefers JSON (curl, `*/*`), else falls through to the UI's 404 page. `RESERVED_CODES` (`src/schemas/links.ts`, case-insensitive) and dotted paths (`/robots.txt`) always go to the UI — **add a new top-level UI page's name there first**.
-- **Proxy:** `trust proxy` is `loopback`; the UI forwards the client IP (`X-Forwarded-For`) on its loopback API calls so rate limits stay per user. Don't widen it.
+- **Proxy:** `trust proxy` is `loopback` + the `TRUST_PROXY` env (extra reverse proxies). Loopback must stay trusted: the UI forwards the client IP (`X-Forwarded-For`) on its loopback API calls so rate limits stay per user. Don't widen it in code — deployments set `TRUST_PROXY`.
 - **TypeScript:** relative imports end in `.ts`; `import type` for types; no enums/namespaces/parameter properties.
 - Never commit `.env`. Never log `Authorization` headers or plaintext keys.
 
@@ -54,5 +54,5 @@ URL shortener: JSON API + server-rendered web UI.
 | `code-reviewer` | pre-commit review (read-only) | — |
 | `docs-writer` | README, CLAUDE.md, `.env.example` | `*.md`, `.env.example` |
 
-**Delegation pattern for a feature:** `db-architect` (if schema changes) → `api-engineer` (API) and `test-engineer` **in parallel** (disjoint files; tests are written against the zod contracts), plus a second `api-engineer` owning `web/**` once the contracts are settled → main agent integrates until `pnpm typecheck && pnpm lint && pnpm test` pass (and `pnpm build` if `web/` changed) → `code-reviewer` and `docs-writer` **in parallel** → apply fixes → commit.
+**Delegation pattern for a feature:** `db-architect` (if schema changes) → `api-engineer` (API) and `test-engineer` **in parallel** (disjoint files; tests are written against the zod contracts), plus a second `api-engineer` owning `web/**` once the contracts are settled → main agent integrates until `pnpm typecheck && pnpm lint && pnpm test` pass (run `pnpm build` first if `web/` changed — `tests/web.e2e.test.ts` runs against `web/build` and is skipped without it) → `code-reviewer` and `docs-writer` **in parallel** → apply fixes → commit.
 Run agents in parallel only when their file ownership doesn't overlap; split one area across several `api-engineer` instances by assigning each an explicit file list.

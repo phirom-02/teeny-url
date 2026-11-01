@@ -7,6 +7,7 @@
 
   let pending = $state(false);
 
+  const keyError = $derived(form?.keyError ?? '');
   const message = $derived(form?.message ?? '');
 </script>
 
@@ -51,11 +52,15 @@
         autocapitalize="none"
         spellcheck="false"
         placeholder="tny_…"
-        aria-invalid={message ? 'true' : undefined}
-        aria-describedby={message ? 'key-hint key-error' : 'key-hint'}
+        aria-invalid={keyError ? 'true' : undefined}
+        aria-describedby={keyError ? 'key-hint key-error' : 'key-hint'}
       />
-      <p id="key-error" class="field-error" aria-live="polite">{message}</p>
+      <p id="key-error" class="field-error" aria-live="polite">{keyError}</p>
     </div>
+
+    {#if message}
+      <p class="notice notice-error" role="alert">{message}</p>
+    {/if}
 
     <button type="submit" class="button" aria-disabled={pending}>
       {pending ? 'Signing in…' : 'Sign in'}

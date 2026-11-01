@@ -12,20 +12,22 @@ export const load: PageServerLoad = ({ locals }) => {
 };
 
 export const actions = {
-  // The key is never echoed back to the page, not even on failure.
+  // The key is never echoed back to the page, not even on failure. `keyError` is a problem with
+  // the key itself (shown on the field); `message` is anything else, such as the API being down
+  // or rate limiting (shown as a notice, the key may well be fine).
   default: async (event) => {
     const value = (await event.request.formData()).get('key');
     const key = typeof value === 'string' ? value.trim() : '';
 
-    if (!key) return fail(400, { message: 'Paste your API key to sign in.' });
-    if (!isPlausibleKey(key)) return fail(400, { message: INVALID_KEY });
+    if (!key) return fail(400, { keyError: 'Paste your API key to sign in.' });
+    if (!isPlausibleKey(key)) return fail(400, { keyError: INVALID_KEY });
 
     const me = await api<Me>(event, key, '/api/me');
     if (me.ok) {
       setSession(event, key);
       redirect(303, '/');
     }
-    if (me.status === 401) return fail(400, { message: INVALID_KEY });
+    if (me.status === 401) return fail(400, { keyError: INVALID_KEY });
     return fail(me.status, { message: me.error.message });
   },
 } satisfies Actions;

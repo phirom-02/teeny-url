@@ -9,7 +9,8 @@ import type { RequestHandler } from 'express';
  * - the address is what the UI forwards to the API as `X-Forwarded-For` for rate limiting.
  */
 export const setResolvedClientHeaders: RequestHandler = (req, _res, next) => {
-  req.headers['x-forwarded-proto'] = req.protocol;
+  // Exactly http or https: a trusted hop's raw X-Forwarded-Proto is never passed on verbatim.
+  req.headers['x-forwarded-proto'] = req.secure ? 'https' : 'http';
   req.headers['x-forwarded-for'] = req.ip ?? ''; // `ip` is only missing once the socket is gone
   next();
 };

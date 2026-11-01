@@ -1,6 +1,7 @@
 import cors from 'cors';
 import express, { type RequestHandler } from 'express';
 import helmet from 'helmet';
+import { env } from './env.ts';
 import { httpLogger } from './lib/logger.ts';
 import { errorHandler } from './middleware/error-handler.ts';
 import { notFound } from './middleware/not-found.ts';
@@ -21,9 +22,13 @@ export interface AppOptions {
 export function createApp(options: AppOptions = {}) {
   const app = express();
   app.disable('x-powered-by');
-  // The web UI's server code calls the API over loopback with `X-Forwarded-For: <client ip>`;
-  // trusting loopback hops only makes `req.ip` (rate limiting) the real client, unspoofable remotely.
-  app.set('trust proxy', 'loopback');
+  // `req.ip` (rate limiting) and `req.protocol` (the UI's CSRF origin check, the session cookie's
+  // `Secure` flag) honour `X-Forwarded-For` / `-Proto` only from these hops, so clients can't
+  // spoof them. Loopback always: the web UI's server code calls the API over loopback with
+  // `X-Forwarded-For: <client ip>`. `TRUST_PROXY` adds an off-host TLS-terminating proxy
+  // (Docker network, k8s ingress, cloud LB) — without it every request looks like plain http
+  // from the proxy's address.
+  app.set('trust proxy', ['loopback', ...env.TRUST_PROXY]);
 
   app.use(httpLogger); // first, so every response (errors included) gets an X-Request-Id
   // No global CSP: JSON routes use `jsonCsp`, `/docs` its own, and the web UI sets a nonce-based one.

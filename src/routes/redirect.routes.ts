@@ -59,7 +59,19 @@ const linkNotFound: RequestHandler = () => {
   throw new AppError('NOT_FOUND', 'Link not found');
 };
 
+/**
+ * Without this, Express would answer `OPTIONS /<any segment>` itself (`200 Allow: GET, HEAD`)
+ * instead of letting it reach the web UI, as `OPTIONS /` does. It must sit on the same route as
+ * `GET`: a route that doesn't handle OPTIONS still adds its methods to the automatic response.
+ */
+const passOptionsThrough: RequestHandler = (_req, _res, next) => {
+  next('router');
+};
+
 /** Mounted after the API and docs: `GET /:code` matches any single path segment. */
 export const redirectRouter = Router();
 
-redirectRouter.get('/:code', skipNonCodes, redirectRateLimit, followLink, jsonCsp, linkNotFound);
+redirectRouter
+  .route('/:code')
+  .options(passOptionsThrough)
+  .get(skipNonCodes, redirectRateLimit, followLink, jsonCsp, linkNotFound);

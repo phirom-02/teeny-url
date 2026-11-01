@@ -3,7 +3,6 @@
  * `src/schemas/*.ts` — the single source of truth. `import type` is erased at build time, so no
  * API runtime code (and no zod) ends up in the UI bundle.
  */
-export type { ErrorCode } from '../../../src/lib/errors.ts';
 export type { ErrorResponse } from '../../../src/schemas/common.ts';
 export type { MeResponse as Me } from '../../../src/schemas/keys.ts';
 export type { CreateLinkBody, Link, LinkList } from '../../../src/schemas/links.ts';

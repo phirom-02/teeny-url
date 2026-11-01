@@ -11,6 +11,9 @@
   const created = $derived(form?.created ?? null);
   const errors = $derived(form?.errors ?? {});
   const values = $derived(form?.values ?? { url: '', alias: '' });
+  // Without JS a failed submit reloads the page: start on the first invalid field. (Enhanced
+  // submits focus it in `use:enhance` below; `autofocus` only applies when an input is created.)
+  const autofocusAlias = $derived(!errors.url && !!errors.alias);
 
   // A browser-side hint only; the API's zod schema decides (src/schemas/links.ts).
   const ALIAS_PATTERN = '[A-Za-z0-9_\\-]{3,32}';
@@ -60,7 +63,7 @@
       type="url"
       class="input"
       required
-      autofocus
+      autofocus={!autofocusAlias}
       autocomplete="off"
       spellcheck="false"
       placeholder="https://example.com/a/very/long/path"
@@ -75,11 +78,13 @@
     <label for="alias">Custom alias <span class="optional">(optional)</span></label>
     <div class="input-group">
       <span class="input-prefix" aria-hidden="true">{data.shortHost}/</span>
+      <!-- svelte-ignore a11y_autofocus (only after a failed no-JS submit with a bad alias) -->
       <input
         id="alias"
         name="alias"
         type="text"
         class="input"
+        autofocus={autofocusAlias}
         autocomplete="off"
         autocapitalize="none"
         spellcheck="false"

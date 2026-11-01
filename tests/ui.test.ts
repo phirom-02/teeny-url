@@ -14,6 +14,7 @@ import {
   createTestKey,
   expectError,
   expectUi,
+  expectUiForwarded,
   UI_STUB_MARKER,
 } from './helpers.ts';
 
@@ -409,5 +410,69 @@ describe('with a UI mounted: response headers', () => {
     expect(res.headers['access-control-allow-origin']).toBe('*');
     const exposed = String(res.headers['access-control-expose-headers']).split(',');
     expect(exposed).toEqual(expect.arrayContaining(['Location', 'X-Request-Id', 'RateLimit']));
+  });
+});
+
+/**
+ * adapter-node derives the client address (`ADDRESS_HEADER=x-forwarded-for`) and the request
+ * origin's scheme (`PROTOCOL_HEADER=x-forwarded-proto`, which feeds SvelteKit's CSRF check and the
+ * cookie `Secure` flag) from headers. `setResolvedClientHeaders` must overwrite both with what
+ * Express resolved (`req.ip`, `req.protocol`, honouring `trust proxy`) before the UI runs.
+ * supertest connects from loopback, which is a trusted hop.
+ */
+describe('with a UI mounted: the UI gets the client identity Express resolved', () => {
+  /** `127.x.x.x`, its IPv4-mapped IPv6 form, or `::1`. */
+  const LOOPBACK = /^(?:(?:::ffff:)?127(?:\.\d{1,3}){3}|::1)$/;
+
+  it('X-Forwarded-For with a chain reaches the UI as the single resolved client IP', async () => {
+    const res = await uiGet('/login', BROWSER_ACCEPT).set('X-Forwarded-For', '1.1.1.1, 2.2.2.2');
+
+    // Trust stops at the first untrusted hop from the right: 2.2.2.2. Never the raw chain.
+    expect(expectUiForwarded(res)['x-forwarded-for']).toBe('2.2.2.2');
+  });
+
+  it('a form POST to the UI gets the resolved client IP and protocol too', async () => {
+    const res = await apiWithUi()
+      .post('/login')
+      .set('Accept', BROWSER_ACCEPT)
+      .set('X-Forwarded-For', '1.1.1.1, 2.2.2.2')
+      .type('form')
+      .send('key=abc');
+
+    expect(expectUiForwarded(res)).toEqual({
+      'x-forwarded-for': '2.2.2.2',
+      'x-forwarded-proto': 'http',
+    });
+  });
+
+  it('without X-Forwarded-For the UI gets the socket address (loopback)', async () => {
+    const res = await uiGet('/login', BROWSER_ACCEPT);
+
+    const forwardedFor = expectUiForwarded(res)['x-forwarded-for'];
+    expect(forwardedFor).toMatch(LOOPBACK);
+  });
+
+  it('X-Forwarded-Proto: https from a trusted (loopback) hop → https', async () => {
+    const res = await uiGet('/login', BROWSER_ACCEPT).set('X-Forwarded-Proto', 'https');
+
+    expect(expectUiForwarded(res)['x-forwarded-proto']).toBe('https');
+  });
+
+  it('without X-Forwarded-Proto the UI gets the socket protocol (http)', async () => {
+    const res = await uiGet('/login', BROWSER_ACCEPT);
+
+    expect(expectUiForwarded(res)['x-forwarded-proto']).toBe('http');
+  });
+
+  // Express resolves a trusted hop's first comma-separated value; the UI only ever receives
+  // exactly `http` or `https` (anything that isn't https counts as http).
+  it.each([
+    ['https, http', 'https'],
+    ['javascript, https', 'http'],
+    ['javascript', 'http'],
+  ])('X-Forwarded-Proto: %s from loopback → %s', async (sent, resolved) => {
+    const res = await uiGet('/login', BROWSER_ACCEPT).set('X-Forwarded-Proto', sent);
+
+    expect(expectUiForwarded(res)['x-forwarded-proto']).toBe(resolved);
   });
 });
