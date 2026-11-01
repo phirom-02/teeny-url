@@ -3,7 +3,7 @@
 URL shortener API. Express 5 + TypeScript on Node 24 (native type stripping — no build step), PostgreSQL 17 (Docker) via Drizzle ORM, zod contracts, OpenAPI docs at `/docs`.
 
 ## Cloud-native learning path (LocalStack)
-The owner is also using this project to learn cloud-native engineering (containers, Kubernetes, Terraform, observability, GitOps, security, resilience) with the LocalStack Student plan. For anything about cloud, AWS, LocalStack, Docker images, Kubernetes, Terraform, OpenTelemetry, Argo CD, or "next stage", read `learning/ROADMAP.md` first. It holds the stage plan, current progress, open decisions and the rules for working through it (coach mode, one branch per stage, no real cloud or non-local cluster outside the capstone).
+The owner is also using this project to learn cloud-native engineering (server operations over SSH, containers, Kubernetes, Terraform, configuration and secrets, architectural patterns, system design, observability, GitOps, security, resilience) with the LocalStack Student plan. For anything about cloud, AWS, LocalStack, SSH, Linux servers, Ansible, secrets and env management, architecture, system design, Docker images, Kubernetes, Terraform, OpenTelemetry, Argo CD, or "next stage", read `learning/ROADMAP.md` first. It holds the stage plan, current progress, open decisions and the rules for working through it (coach mode, one branch per stage, no real cloud or non-local cluster outside the capstone).
 
 ## Commands
 | Task | Command |
@@ -15,6 +15,7 @@ The owner is also using this project to learn cloud-native engineering (containe
 | Tests | `pnpm test` (real Postgres test DB, no mocks) |
 | Typecheck / lint / format | `pnpm typecheck` · `pnpm lint` · `pnpm format` |
 | New migration | edit `src/db/schema.ts` → `pnpm db:generate --name <desc>` → `pnpm db:migrate` |
+| Learning roadmap page | `pnpm roadmap` → http://127.0.0.1:8765 (rebuilds from `learning/ROADMAP.md`); `pnpm roadmap:build` only regenerates it |
 
 ## Layout
 - `src/app.ts` — `createApp()`: middleware → routers → `notFound` → `errorHandler`. `redirectRouter` (`GET /:code`) is mounted last.

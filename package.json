@@ -22,7 +22,9 @@
     "key:list": "node --env-file-if-exists=.env scripts/keys.ts list",
     "key:revoke": "node --env-file-if-exists=.env scripts/keys.ts revoke",
     "docker:up": "docker compose up -d --wait",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "roadmap": "node learning/serve-roadmap.mjs",
+    "roadmap:build": "node learning/build-roadmap-html.mjs"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^9.1.0",
