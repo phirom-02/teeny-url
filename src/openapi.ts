@@ -10,6 +10,7 @@ import type { ErrorCode } from './lib/errors.ts';
 import type { ValidationIssue } from './middleware/error-handler.ts';
 import { RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } from './middleware/rate-limit.ts';
 import { ErrorResponse, HealthResponse, RootResponse } from './schemas/common.ts';
+import { MeResponse } from './schemas/keys.ts';
 import { CodeParams, CreateLinkBody, Link, LinkList, ListLinksQuery } from './schemas/links.ts';
 import { LinkStats } from './schemas/stats.ts';
 
@@ -19,9 +20,10 @@ const BEARER_AUTH = 'bearerAuth';
 
 const DESCRIPTION = `
 A tiny URL shortener: create short links, follow them, and see who clicks.
+The same server also hosts the web UI (\`/\`, \`/login\`, …), itself a client of this API.
 
 ## Authentication
-Every \`/api/links\` endpoint requires an API key. Create one on the server with:
+Every \`/api/links\` endpoint and \`GET /api/me\` require an API key. Create one on the server with:
 
 \`\`\`sh
 pnpm key:create <name>
@@ -34,7 +36,7 @@ Authorization: Bearer <key>
 \`\`\`
 
 Links are private to the key that created them; other keys' links respond \`404\`.
-Redirects (\`GET /{code}\`) and the system endpoints are public.
+Redirects (\`GET /{code}\`), \`GET /api\` and the health/docs endpoints are public.
 
 ## Errors
 Every error uses the same envelope:
@@ -116,13 +118,14 @@ function buildRegistry(): OpenAPIRegistry {
   // ── System ────────────────────────────────────────────────────────────────
   registry.registerPath({
     method: 'get',
-    path: '/',
+    path: '/api',
     tags: ['System'],
     operationId: 'getServiceInfo',
     summary: 'Service info',
     description: 'Returns the service name, version and the path of these docs.',
     responses: {
       200: json('Service info', RootResponse),
+      429: responses.rateLimited,
     },
   });
 
@@ -140,6 +143,23 @@ function buildRegistry(): OpenAPIRegistry {
         db: 'down',
         uptime: 42.5,
       }),
+    },
+  });
+
+  // ── Account ───────────────────────────────────────────────────────────────
+  registry.registerPath({
+    method: 'get',
+    path: '/api/me',
+    tags: ['Account'],
+    ...authenticated,
+    operationId: 'getCurrentKey',
+    summary: 'Who am I',
+    description:
+      'Returns the name and display prefix of the API key that authenticated the request — a cheap way to check a key.',
+    responses: {
+      200: json('The authenticated API key', MeResponse),
+      401: responses.unauthorized,
+      429: responses.rateLimited,
     },
   });
 
@@ -250,8 +270,12 @@ function buildRegistry(): OpenAPIRegistry {
     tags: ['Redirect'],
     operationId: 'followLink',
     summary: 'Follow a short link',
-    description:
+    description: [
       'Redirects (302) to the target URL with `Cache-Control: no-store`; every GET is counted as a click (HEAD is not).',
+      '',
+      'For an unknown code, API clients — whose `Accept` prefers JSON: `application/json`, `*/*` or none, as with curl — get the JSON `404` below; browsers (`Accept: text/html`) fall through to the web UI, which renders its 404 page.',
+      'Reserved words (`api`, `docs`, `login`, …) and file-like paths (`/robots.txt`) are never treated as codes.',
+    ].join('\n'),
     request: { params: CodeParams },
     responses: {
       302: {
@@ -267,7 +291,11 @@ function buildRegistry(): OpenAPIRegistry {
           },
         },
       },
-      404: error('No link with this code exists', 'NOT_FOUND', 'Link not found'),
+      404: error(
+        'No link with this code exists (API clients; browsers get the web UI 404 page)',
+        'NOT_FOUND',
+        'Link not found',
+      ),
       429: responses.rateLimited,
     },
   });
@@ -285,6 +313,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
     servers: [{ url: env.BASE_URL }],
     tags: [
       { name: 'Links', description: 'Create and manage your short links (API key required)' },
+      { name: 'Account', description: 'The API key you are calling with (API key required)' },
       { name: 'Redirect', description: 'Public short-link redirects' },
       { name: 'System', description: 'Service info and health' },
     ],

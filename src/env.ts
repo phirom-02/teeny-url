@@ -11,6 +11,11 @@ const EnvSchema = z.object({
     .refine((url) => new URL(url).pathname === '/', 'BASE_URL must be an origin, without a path')
     .transform((url) => new URL(url).origin),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  /** Mount the built SvelteKit UI (`web/build`) in `src/server.ts`. Off in dev (Vite serves it). */
+  SERVE_UI: z
+    .enum(['true', 'false', '1', '0'])
+    .default('true')
+    .transform((value) => value === 'true' || value === '1'),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

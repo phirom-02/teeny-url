@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "pnpm run \"/^dev:(api|web)$/\"",
-    "dev:api": "node --watch --env-file-if-exists=.env src/server.ts",
+    "dev:api": "SERVE_UI=false node --watch --env-file-if-exists=.env src/server.ts",
     "dev:web": "pnpm --filter @teeny-url/web dev",
     "build": "pnpm --filter @teeny-url/web build",
     "start": "node --env-file-if-exists=.env src/server.ts",

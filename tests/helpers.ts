@@ -1,5 +1,5 @@
 import { asc, eq } from 'drizzle-orm';
-import type { Express } from 'express';
+import type { Express, RequestHandler } from 'express';
 import supertest from 'supertest';
 import { expect } from 'vitest';
 import { createApp } from '../src/app.ts';
@@ -15,11 +15,82 @@ export type AuthHeaders = { Authorization: string };
 
 let app: Express | undefined;
 
-/** A supertest agent bound to a (lazily created, shared per file) app instance. */
+/** A supertest agent bound to a (lazily created, shared per file) API-only app instance. */
 export function api() {
   app ??= createApp();
   return supertest(app);
 }
+
+/** What the UI stub saw — proves which requests reach the UI and that their bodies arrive unread. */
+export interface UiEcho {
+  method: string;
+  /** `req.originalUrl` as the UI handler received it. */
+  url: string;
+  /** The raw request body, read by the stub itself from the request stream. */
+  body: string;
+  /** True if something in front of the UI handler had already drained the request stream. */
+  bodyConsumed: boolean;
+}
+
+/** Marker embedded in every page the UI stub renders. */
+export const UI_STUB_MARKER = 'teeny-ui-stub';
+
+const UI_ECHO_PATTERN = new RegExp(
+  `<script type="application/json" id="${UI_STUB_MARKER}">(.*?)</script>`,
+  's',
+);
+
+/**
+ * Stand-in for SvelteKit's adapter-node handler (not a mock of our code). Like SvelteKit, it reads
+ * the raw request body from the stream itself, then answers `200 text/html` with a page echoing the
+ * method, original URL and body. It sets no CSP header: SvelteKit sets its own.
+ */
+export const uiStub: RequestHandler = (req, res) => {
+  const reply = (body: string, bodyConsumed: boolean) => {
+    const echo: UiEcho = { method: req.method, url: req.originalUrl, body, bodyConsumed };
+    const json = JSON.stringify(echo).replaceAll('<', '\\u003c');
+    res
+      .status(200)
+      .type('html')
+      .send(
+        `<!doctype html><title>UI</title><script type="application/json" id="${UI_STUB_MARKER}">${json}</script>`,
+      );
+  };
+
+  // A body parser in front of us would have drained the stream; waiting for 'end' would hang.
+  if (req.readableEnded) {
+    reply('', true);
+    return;
+  }
+  const chunks: Buffer[] = [];
+  req.on('data', (chunk: Buffer) => chunks.push(chunk));
+  req.on('end', () => reply(Buffer.concat(chunks).toString('utf8'), false));
+};
+
+let uiApp: Express | undefined;
+
+/** A supertest agent bound to an app with the UI stub mounted (as in production with SvelteKit). */
+export function apiWithUi() {
+  uiApp ??= createApp({ uiHandler: uiStub });
+  return supertest(uiApp);
+}
+
+/** Asserts the response was rendered by the UI stub and returns what the stub received. */
+export function expectUi(res: supertest.Response): UiEcho {
+  expect(res.status, `expected the UI stub, got: ${res.text?.slice(0, 300)}`).toBe(200);
+  expect(res.headers['content-type']).toMatch(/text\/html/);
+  const match = UI_ECHO_PATTERN.exec(res.text ?? '');
+  expect(
+    match,
+    `response was not rendered by the UI stub: ${res.text?.slice(0, 300)}`,
+  ).not.toBeNull();
+  return JSON.parse(match?.[1] ?? '{}') as UiEcho;
+}
+
+/** `Accept` headers of real browser page navigations. */
+export const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,*/*;q=0.8';
+export const CHROME_ACCEPT =
+  'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
 
 export interface TestKey {
   key: string;

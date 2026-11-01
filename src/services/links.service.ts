@@ -5,7 +5,12 @@ import { env } from '../env.ts';
 import { AppError } from '../lib/errors.ts';
 import { generateShortCode } from '../lib/short-code.ts';
 import { isSelfReferential } from '../lib/url.ts';
-import type { CreateLinkBody, Link, ListLinksQuery } from '../schemas/links.ts';
+import {
+  type CreateLinkBody,
+  type Link,
+  type ListLinksQuery,
+  RESERVED_CODES,
+} from '../schemas/links.ts';
 
 /** Generated-code collisions are astronomically rare; this only guards against a hot loop. */
 const MAX_CODE_ATTEMPTS = 5;
@@ -77,7 +82,10 @@ export async function createLink(apiKeyId: string, input: CreateLinkBody): Promi
 
   for (let attempt = 1; attempt <= MAX_CODE_ATTEMPTS; attempt++) {
     try {
-      return await insertLink({ apiKeyId, code: generateShortCode(), targetUrl: input.url });
+      const code = generateShortCode();
+      // A random code that spells a reserved word (e.g. "account") would be unreachable.
+      if (RESERVED_CODES.includes(code.toLowerCase())) continue;
+      return await insertLink({ apiKeyId, code, targetUrl: input.url });
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
     }

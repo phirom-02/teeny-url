@@ -21,6 +21,7 @@ describe('requireApiKey', () => {
     ['GET', '/api/links/abc1234'],
     ['DELETE', '/api/links/abc1234'],
     ['GET', '/api/links/abc1234/stats'],
+    ['GET', '/api/me'],
   ] as const;
 
   it.each(protectedRoutes)(
