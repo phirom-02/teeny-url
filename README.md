@@ -1,18 +1,20 @@
 # Teeny-URL
 
-A small URL shortener API. You create short links with an API key, the service redirects visitors and counts their clicks.
+A small URL shortener with a JSON API and a server-rendered web UI. You create short links with an API key, and the service redirects visitors and counts their clicks.
 
-**Stack:** Express 5 · TypeScript run directly by Node 24 (type stripping, no build step) · PostgreSQL 17 in Docker · Drizzle ORM · zod 4 contracts → OpenAPI 3.1 → Scalar docs · pino · Biome · vitest + supertest · pnpm
+**Stack:** Express 5 · TypeScript run directly by Node 24 (type stripping, no build step for the API) · SvelteKit 3 + Svelte 5 web UI (adapter-node, mounted by Express) · PostgreSQL 17 in Docker · Drizzle ORM · zod 4 contracts → OpenAPI 3.1 → Scalar docs · pino · Biome · vitest + supertest · pnpm workspace
 
 ## Features
 
+- **Web UI:** sign in with an API key, shorten a URL (with an optional alias) and copy the result, and see your 5 most recent links with their click counts. Pages are rendered on the server, work without JavaScript, and follow the OS light/dark setting.
+- **One server:** in production, Express serves the UI, the JSON API, the docs and the redirects on one port.
 - **Short links:** random 7-character base62 codes, or a custom alias of your choice.
 - **Redirects:** `302` with `Cache-Control: no-store`, so every visit reaches the server and is counted. `HEAD` requests are not counted.
 - **Click stats:** total clicks, daily counts for the last 30 days (UTC), and the top 5 referrers. Only the referrer's hostname is stored.
 - **API keys:** keys start with `tny_` and only their SHA-256 hash is stored. Each link is private to the key that created it; other keys get `404`.
-- **Contracts first:** zod schemas drive request validation, the TypeScript types, the OpenAPI 3.1 document and the interactive docs at `/docs`.
-- **Hardened defaults:** a single error envelope, per-IP rate limits, helmet security headers, open CORS, an `X-Request-Id` on every response, and structured pino logs that never contain `Authorization` headers.
-- **No build step:** `node src/server.ts` runs the TypeScript as-is.
+- **Contracts first:** zod schemas drive request validation, the TypeScript types (the UI imports them type-only), the OpenAPI 3.1 document and the interactive docs at `/docs`.
+- **Hardened defaults:** a single error envelope, per-IP rate limits, helmet security headers, strict CSPs (nonce-based for the UI), CORS on `/api` only, an `X-Request-Id` on every response, and structured pino logs that never contain `Authorization` headers.
+- **No build step for the API:** `node src/server.ts` runs the TypeScript as-is. Only the UI is built (`pnpm build`).
 - **Real tests:** vitest + supertest against a real Postgres test database, with no mocks.
 
 ## Quick start
@@ -31,18 +33,57 @@ cp .env.example .env
 pnpm docker:up              # Postgres 17 container "teeny-url-postgres" on :5432
 pnpm db:migrate             # apply migrations to the dev database
 pnpm key:create my-laptop   # prints a tny_… key ONCE — copy it
-pnpm dev                    # http://localhost:3000 · docs at http://localhost:3000/docs
+pnpm dev                    # UI http://localhost:5173 · API http://localhost:3000 · docs /docs
 ```
 
-On its first start, the container also creates `teeny_url_test`, the database that `pnpm test` uses. The examples below read your key from an environment variable:
+Open http://localhost:5173 and paste the key to sign in. `pnpm dev` runs the API and the SvelteKit dev server (hot reload) side by side.
+
+To run it the way production does, with one server on :3000 for the UI, API, docs and redirects, use this instead of `pnpm dev`:
+
+```sh
+pnpm build && pnpm start    # then open http://localhost:3000
+```
+
+On its first start, the container also creates `teeny_url_test`, the database that `pnpm test` uses. The curl examples below read your key from an environment variable:
 
 ```sh
 export TEENY_KEY='tny_…'    # replace with the key printed by key:create
 ```
 
-## Usage
+## Web UI
 
-All examples assume `pnpm dev` is running on `http://localhost:3000`. The responses below come from a real run, pretty-printed and with headers trimmed.
+The UI is a SvelteKit app in `web/` that renders every page on the server. It is a client of the JSON API: its server-side code calls `/api/*` with the signed-in key (at `API_ORIGIN`) and never touches the database.
+
+| Path | Page |
+|---|---|
+| `/login` | Sign in by pasting an API key. The UI checks the key with `GET /api/me`. Signed-in visitors are redirected to `/` |
+| `/` | Shorten form: long URL plus an optional alias. The new short link appears with a **Copy** button. Below the form are your 5 most recent links with their click counts. Signed-out visitors get a `303` to `/login` |
+| `/logout` | The **Sign out** button in the header (a form `POST`). It deletes the cookie and redirects to `/login` |
+| anything else | Styled error page: "This short link doesn't exist" for an unknown code, "Page not found", or a notice when the API is down or rate limited |
+
+| Topic | Behavior |
+|---|---|
+| Session | The API key itself, in the `httpOnly` cookie `teeny_key` (`SameSite=Lax`, `Secure` over https, kept for 30 days). Page scripts can't read it, and the key is never echoed into a page. There is no server-side session store |
+| Key checks | On every request the UI resolves the cookie with `GET /api/me`. A revoked or unknown key clears the cookie, which signs the visitor out. The UI's API calls count against that visitor's `/api/*` rate limit |
+| Without JavaScript | Every form is a plain HTML `POST` (SvelteKit form actions), progressively enhanced when JS runs. Only the Copy button needs JS, and it is hidden without it |
+| Security | Nonce-based CSP (`script-src 'self'` + nonce, `style-src 'self'`, `frame-ancestors 'none'`). SvelteKit rejects cross-site form posts with `403`. Signed-in pages are sent with `Cache-Control: private, no-store` |
+| Client IP | Before the UI runs, Express sets `X-Forwarded-For` to the client IP it resolved. The UI forwards it on its loopback API calls, and the API trusts loopback proxies (`trust proxy` = `loopback`), so each visitor keeps their own rate-limit bucket |
+
+Under `pnpm dev`, the "API docs" link and the short-link host shown next to the alias field point at `API_ORIGIN` (the API on :3000), because Vite serves the UI on :5173.
+
+## API usage
+
+All examples assume the API is on `http://localhost:3000`, which is the case with both `pnpm dev` and `pnpm start`. The responses below come from a real run, pretty-printed, with headers trimmed and the key prefix replaced by a placeholder.
+
+**Check your key:**
+
+```sh
+curl -s http://localhost:3000/api/me -H "Authorization: Bearer $TEENY_KEY"
+```
+
+```json
+{ "name": "my-laptop", "prefix": "tny_AbCd1234" }
+```
 
 **Create a link with a random code:**
 
@@ -103,7 +144,7 @@ Location: https://example.com/launch
 X-Request-Id: 47ae240b-99e4-495a-8261-8a2c68fe24ca
 ```
 
-When a request sends a `Referer` header, only its hostname is recorded. Without one, the click is counted as `direct`. A `HEAD` request (`curl -I`) returns the same redirect without counting a click.
+When a request sends a `Referer` header, only its hostname is recorded. Without one, the click is counted as `direct`. A `HEAD` request (`curl -I`) returns the same redirect without counting a click. An unknown code returns a JSON `404` to curl, while a browser gets the UI's 404 page (see [Routing](#routing)).
 
 ```sh
 curl -s -o /dev/null -H "Referer: https://news.ycombinator.com/item?id=1" http://localhost:3000/launch-day
@@ -190,7 +231,9 @@ Interactive docs are served at [`/docs`](http://localhost:3000/docs) (Scalar) an
 
 | Method | Path | Auth | Description | Success |
 |---|---|---|---|---|
-| `GET` | `/` | — | Service name, version and docs path | `200` |
+| `GET` | `/` | — | The web UI (signed out: `303` to `/login`). Without the UI mounted, the same JSON as `GET /api` | `200` / `303` |
+| `GET` | `/api` | — | Service name, version and docs path | `200` |
+| `GET` | `/api/me` | Bearer | Name and display prefix of the calling key: `{ "name", "prefix" }` | `200` |
 | `GET` | `/health` | — | Uptime and database reachability; `503` with `"status": "degraded"` if the DB is down; never cached | `200` |
 | `GET` | `/docs` | — | Scalar API reference UI | `200` |
 | `GET` | `/openapi.json` | — | OpenAPI 3.1 document | `200` |
@@ -203,19 +246,36 @@ Interactive docs are served at [`/docs`](http://localhost:3000/docs) (Scalar) an
 
 Authenticated requests send `Authorization: Bearer tny_…`.
 
+### Routing
+
+Express matches requests in this order:
+
+| Request | Result |
+|---|---|
+| `/health`, `/docs`, `/openapi.json` | Served by Express |
+| `/api` and `/api/*` | Always the JSON API, never the UI. Unknown paths get a JSON `404 NOT_FOUND`, even from a browser |
+| `GET /{code}` for an existing link | `302` redirect, whatever the client |
+| `GET /{code}` that doesn't exist, from an API client (`Accept` prefers JSON: `application/json`, `*/*` or no `Accept`, as with curl) | JSON `404 NOT_FOUND` (`Link not found`) |
+| `GET /{code}` that doesn't exist, from a browser (`Accept: text/html`) | The UI's HTML 404 page ("This short link doesn't exist") |
+| A reserved word, case-insensitively (see Aliases below), or a path containing a dot (`/robots.txt`, `/favicon.ico`) | Never looked up as a code (no DB query, no redirect rate limit); goes to the UI |
+| Everything else (pages, form posts, `/_app/*` assets) | The UI |
+
+Without the UI mounted (`SERVE_UI=false`, or `web/build` missing), everything that would go to the UI gets a JSON `404`, and `GET /` returns the service info.
+
 ### Rules
 
 | Topic | Behavior |
 |---|---|
-| Random codes | 7 characters of base62 (`0-9A-Za-z`) from a cryptographic RNG; retried on collision |
-| Aliases | Match `[A-Za-z0-9_-]{3,32}` and are case-sensitive (`Launch-Day` and `launch-day` are different links). They are unique across all keys. Reserved words, checked case-insensitively: `api`, `docs`, `health`, `openapi`, `admin`, `static` |
+| Random codes | 7 characters of base62 (`0-9A-Za-z`) from a cryptographic RNG; retried on collision or when the code spells a reserved word |
+| Aliases | Match `[A-Za-z0-9_-]{3,32}` and are case-sensitive (`Launch-Day` and `launch-day` are different links). They are unique across all keys. Reserved words, checked case-insensitively: `api`, `docs`, `health`, `openapi`, `admin`, `static`, and the UI paths `login`, `logout`, `links`, `settings`, `account`, `_app` |
 | Target URLs | `http`/`https` only, at most 2048 characters, and not pointing back at the service: same host and port as `BASE_URL`, including other spellings such as `LOCALHOST`, a trailing dot, or (for a loopback `BASE_URL`) `127.x.x.x`, `[::1]` and `0.0.0.0` |
-| Request body | JSON, at most 16 kB; larger bodies get `413` |
+| Request body | `/api/*` only: JSON, at most 16 kB; larger bodies get `413`. Express does not parse bodies outside `/api`, so UI form posts reach SvelteKit untouched |
 | Redirects | `302` + `Cache-Control: no-store`. A `GET` updates the click counter and inserts a click row in a single transaction. `HEAD` is not counted |
 | Click data | Referrer: lowercased hostname only, with no path or query; `direct` when there is no `Referer`. User agent: truncated to 512 characters |
 | Stats | `clicksByDay` covers the last 30 UTC days including today, oldest first, with zeros for days without clicks. `topReferrers` lists the top 5 by clicks |
 | Ownership | A link is visible only to the key that created it. Other keys get `404` (not `403`). Revoking a key does not delete its links, which keep redirecting |
-| Rate limit | Per client IP: 120 requests per minute on `/api/*`, and 300 per minute on redirects (`/{code}`), with IETF draft-8 `RateLimit` / `RateLimit-Policy` headers. Going over returns `429` + `Retry-After`. `/health`, `/docs` and `/openapi.json` are not limited. `trust proxy` is not enabled, so behind a reverse proxy all clients share one bucket |
+| Rate limit | Per client IP: 120 requests per minute on `/api/*`, and 300 per minute on redirects (`/{code}`), with IETF draft-8 `RateLimit` / `RateLimit-Policy` headers. Going over returns `429` + `Retry-After`. `/health`, `/docs`, `/openapi.json` and UI pages are not limited, but the UI's own API calls count toward the visitor's `/api/*` limit. `trust proxy` is `loopback`: `X-Forwarded-For` is honored only from loopback addresses (`127.0.0.0/8`, `::1`), so behind a reverse proxy on another host all clients share one bucket |
+| CORS | Open (`*`) on `/api/*` only, exposing `Location`, `X-Request-Id`, `RateLimit`, `RateLimit-Policy` and `Retry-After`. UI pages are not CORS-enabled |
 | Request IDs | Every response has an `X-Request-Id`. An incoming one is reused if it matches `[A-Za-z0-9._:-]{1,128}` |
 
 ### Errors
@@ -230,7 +290,7 @@ Authenticated requests send `Authorization: Bearer tny_…`.
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Invalid body, query or path parameter; malformed JSON; reserved alias; URL pointing at the service itself |
 | `UNAUTHORIZED` | 401 | Missing, malformed, unknown or revoked API key. The response includes a `WWW-Authenticate: Bearer` header |
-| `NOT_FOUND` | 404 | Unknown code, a link owned by another key, or an unknown route |
+| `NOT_FOUND` | 404 | Unknown code (API clients), a link owned by another key, or an unknown `/api` route |
 | `ALIAS_TAKEN` | 409 | Alias already in use by any key |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body over 16 kB |
 | `RATE_LIMITED` | 429 | Over 120 requests per minute on `/api/*`, or 300 on redirects. `Retry-After` gives the seconds to wait |
@@ -238,19 +298,19 @@ Authenticated requests send `Authorization: Bearer tny_…`.
 
 ## API keys
 
-Manage keys on the server with the CLI. Each command reads `DATABASE_URL` from `.env`.
+Manage keys on the server with the CLI. Each command reads `DATABASE_URL` from `.env`. The same keys sign in to the web UI.
 
 | Command | What it does |
 |---|---|
 | `pnpm key:create <name>` | Creates a key and prints its id, display prefix and full `tny_…` key. The full key is shown **once**; only its SHA-256 hash and a 12-character prefix (e.g. `tny_AbCd1234`) are stored. Names are 1–64 characters |
 | `pnpm key:list` | Lists all keys, active and revoked, with prefix, creation time, last use and status |
-| `pnpm key:revoke <id-or-prefix>` | Revokes a key by UUID or display prefix, effective immediately. If a prefix matches more than one active key, revoke by id |
+| `pnpm key:revoke <id-or-prefix>` | Revokes a key by UUID or display prefix, effective immediately (the UI signs out on the next request). If a prefix matches more than one active key, revoke by id |
 
 A key is `tny_` followed by 32 base64url characters (36 characters in total).
 
 ## Configuration
 
-Copy `.env.example` to `.env`. The API validates its variables with zod at startup (`src/env.ts`) and exits with a readable message if one is invalid. `.env` is loaded with Node's `--env-file-if-exists`. Variables already set in the shell take precedence over `.env`.
+Copy `.env.example` to `.env`. The API validates its variables with zod at startup (`src/env.ts`) and exits with a readable message if one is invalid. `.env` is loaded with Node's `--env-file-if-exists`. Variables already set in the shell take precedence over `.env`. Under `pnpm dev`, the SvelteKit dev server reads the same root `.env` (`env.dir` in `web/vite.config.ts`) and validates `API_ORIGIN` in `web/src/env.ts`.
 
 | Variable | Default | Used by | Description |
 |---|---|---|---|
@@ -263,8 +323,10 @@ Copy `.env.example` to `.env`. The API validates its variables with zod at start
 | `BASE_URL` | `http://localhost:3000` | API | Public origin: `http(s)://host[:port]`, no path. Used to build `shortUrl`, as the OpenAPI `servers` URL, by the docs CSP, and by the check that rejects links to the service itself |
 | `NODE_ENV` | `development` | API | `development`: pretty logs through pino-pretty, a dev dependency. `production`: JSON logs. `test`: silent logs and no rate limit |
 | `LOG_LEVEL` | `info` | API | `fatal` · `error` · `warn` · `info` · `debug` · `trace` · `silent` |
+| `SERVE_UI` | `true` | API | `true`/`1`: mount the built UI (`web/build`). `false`/`0`: API only, and `GET /` returns the service info. `pnpm dev` (`dev:api`) always sets `false`. If `web/build` is missing, the server logs a warning and runs API-only |
+| `API_ORIGIN` | unset | web UI (server side) | Origin the UI's server code calls the API on (http or https). When unset: `http://127.0.0.1:$PORT` under `pnpm start` (set by `src/server.ts`), `http://localhost:3000` under `pnpm dev`. In dev it also sets the "API docs" link and the short-link host shown in the form |
 
-If you change the Postgres port or credentials, update `DATABASE_URL` to match. Also update `tests/test-env.ts`, which hard-codes `postgres://teeny:teeny@localhost:5432/teeny_url_test`.
+If you change the Postgres port or credentials, update `DATABASE_URL` to match. Also update `tests/test-env.ts`, which hard-codes `postgres://teeny:teeny@localhost:5432/teeny_url_test`. If you change `PORT`, update `BASE_URL`, and set `API_ORIGIN=http://localhost:<PORT>` for `pnpm dev`.
 
 ## Project structure
 
@@ -275,18 +337,29 @@ If you change the Postgres port or credentials, update `DATABASE_URL` to match. 
 ├── docker/postgres/init.sql # creates teeny_url_test on first container start
 ├── drizzle/                 # generated SQL migrations (never hand-edited)
 ├── scripts/keys.ts          # API key CLI (create / list / revoke)
-├── src/
-│   ├── app.ts               # createApp(): middleware → routers → notFound → errorHandler
-│   ├── server.ts            # listen + graceful shutdown
+├── src/                     # the API (Express, no build step)
+│   ├── app.ts               # createApp({ uiHandler? }): system routes → /api → redirects → UI or JSON 404 → errorHandler
+│   ├── server.ts            # loads web/build/handler.js if present, listen + graceful shutdown
 │   ├── env.ts               # zod-validated environment
 │   ├── openapi.ts           # OpenAPI 3.1 document built from the zod schemas
 │   ├── db/                  # Drizzle schema, pg pool, migrator
 │   ├── lib/                 # errors, logger, short codes, URL + API key helpers
-│   ├── middleware/          # auth, rate limit, not-found, error handler
+│   ├── middleware/          # auth, rate limit, CSP, UI headers, not-found, error handler
 │   ├── routes/              # HTTP layer: parse input, shape output
 │   ├── schemas/             # zod contracts: validation, types and OpenAPI in one place
 │   └── services/            # business logic and queries
-└── tests/                   # vitest + supertest; unit/ holds pure helper tests
+├── tests/                   # vitest + supertest; unit/ holds pure helper tests
+└── web/                     # the web UI: SvelteKit 3 workspace package @teeny-url/web
+    ├── vite.config.ts       # SvelteKit config as plugin options: adapter-node, CSP, env dir
+    ├── src/
+    │   ├── env.ts           # declared env vars (API_ORIGIN), validated at startup
+    │   ├── hooks.server.ts  # resolves the session cookie with GET /api/me
+    │   ├── lib/server/      # server-only: API client, session cookie, config
+    │   ├── lib/components/  # CopyButton, Logo
+    │   ├── lib/types.ts     # type-only re-exports of the API's zod contracts
+    │   └── routes/          # / (shorten + recent links), /login, /logout, +error
+    ├── static/              # robots.txt
+    └── build/               # `pnpm build` output (git-ignored), mounted by src/server.ts
 ```
 
 ## Development
@@ -295,10 +368,13 @@ If you change the Postgres port or credentials, update `DATABASE_URL` to match. 
 
 | Script | What it does |
 |---|---|
-| `pnpm dev` | Start the API with `node --watch` (restarts on change) |
-| `pnpm start` | Start the API without watch |
-| `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm lint` | `biome check .` (lint, format check and import order) |
+| `pnpm dev` | Runs `dev:api` and `dev:web` in parallel. Open http://localhost:5173 |
+| `pnpm dev:api` | The API with `node --watch` on `PORT` (:3000) and `SERVE_UI=false` |
+| `pnpm dev:web` | The SvelteKit dev server (Vite, :5173, hot reload). Signing in needs the API running |
+| `pnpm build` | Builds the UI into `web/build` (adapter-node). The API needs no build |
+| `pnpm start` | One server on `PORT`, without watch: UI (if built), API, docs and redirects |
+| `pnpm typecheck` | `tsc --noEmit` for the API (TypeScript 7), then `svelte-check` for the UI (TypeScript 6) |
+| `pnpm lint` | `biome check .`: lint, format check and import order for `.ts`/`.json`, including `web/`. `.svelte` files are left to svelte-check |
 | `pnpm format` | `biome check --write .` (apply fixes) |
 | `pnpm test` / `pnpm test:watch` | Run the vitest suite once / in watch mode |
 | `pnpm db:generate --name <desc>` | Generate a migration from `src/db/schema.ts` into `drizzle/` |
@@ -314,6 +390,7 @@ Before committing, run `pnpm typecheck && pnpm lint && pnpm test`.
 - The suite needs the Postgres container to be running (`pnpm docker:up`). It uses `teeny_url_test` and never touches your dev data.
 - vitest's global setup (`tests/global-setup.ts`) applies migrations to the test database automatically, and `tests/setup.ts` truncates every table before each test.
 - HTTP tests call `createApp()` through supertest, so no server or port is involved. Test files run one at a time because they share the database.
+- UI routing tests (`tests/ui.test.ts`) mount a stub handler with `createApp({ uiHandler })`, so they don't need `pnpm build`. The SvelteKit pages have no automated tests yet; `pnpm typecheck` runs svelte-check over them.
 - `NODE_ENV=test` silences logs and disables the rate limit.
 - If `teeny_url_test` is missing because your Docker volume predates `init.sql`, create it with `docker exec teeny-url-postgres createdb -U teeny teeny_url_test`.
 
@@ -333,7 +410,7 @@ Don't edit files in `drizzle/` by hand. If an unreleased migration is wrong, del
 | Agent | Use for | Owns |
 |---|---|---|
 | `db-architect` | Schema changes, migrations, indexes, non-trivial SQL | `src/db/**`, `drizzle/**` |
-| `api-engineer` | Routes, middleware, services, zod contracts, OpenAPI, key CLI | `src/**` except `src/db`, plus `scripts/**`. It edits only the files its task assigns |
+| `api-engineer` | Routes, middleware, services, zod contracts, OpenAPI, key CLI, and the web UI | Per task, **either** the API (`src/**` except `src/db`, plus `scripts/**`) **or** the UI (`web/**`). It edits only the files its task assigns |
 | `test-engineer` | Writing and fixing tests, reproducing bugs as failing tests | `tests/**`, `vitest.config.ts`. It never edits `src/` and reports app bugs instead |
 | `code-reviewer` | Pre-commit review of correctness, security, contracts and conventions; runs all checks | Nothing (read-only) |
 | `docs-writer` | README, CLAUDE.md, `.env.example`, OpenAPI descriptions | `*.md`, `.env.example`, `description`/`example` text in zod `.meta()` |
@@ -341,19 +418,23 @@ Don't edit files in `drizzle/` by hand. If an unreleased migration is wrong, del
 **Delegation pattern for a feature:**
 
 1. `db-architect`, if the schema changes.
-2. `api-engineer` and `test-engineer` **in parallel**. Their files don't overlap, and tests are written against the zod contracts.
-3. The main agent integrates the work until `pnpm typecheck && pnpm lint && pnpm test` pass.
-4. `code-reviewer` and `docs-writer` **in parallel**.
-5. Apply the fixes, then commit.
+2. `api-engineer` for the API contracts and routes. If the UI changes, a second `api-engineer` instance owns `web/**`; it can start in parallel once the zod contracts are settled.
+3. `test-engineer` in parallel with step 2. Its files don't overlap, and tests are written against the zod contracts.
+4. The main agent integrates the work until `pnpm typecheck && pnpm lint && pnpm test` pass (and `pnpm build` if `web/` changed).
+5. `code-reviewer` and `docs-writer` **in parallel**.
+6. Apply the fixes, then commit.
 
 Run agents in parallel only when their file ownership doesn't overlap. To split one area across several `api-engineer` instances, give each one an explicit list of files.
 
 ## Roadmap
 
-- Web UI for creating links and browsing stats
+- Links dashboard in the UI: all links with pagination, search and delete
+- Per-link stats page with a clicks-per-day chart and top referrers
+- API key management in the UI (create, list, revoke), which needs new API endpoints
 - Link expiration (`expiresAt`), with expired links no longer redirecting
 - A QR code for each short link
+- Browser tests for the UI (e.g. Playwright)
 - Redis cache for hot redirects, with click writes moved off the request path
-- Dockerfile for the API, a compose service and a deployment guide (including `trust proxy`)
+- Dockerfile (API + built UI), a compose service and a deployment guide (including `trust proxy` behind a reverse proxy)
 - Per-key rate limits and quotas
 - Bulk link creation
