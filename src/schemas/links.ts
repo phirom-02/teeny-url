@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const SHORT_CODE_LENGTH = 7;
 export const MAX_URL_LENGTH = 2048;
 
-/** Codes that would shadow our own routes. Compared case-insensitively. */
+/** Codes that would shadow our own routes or UI pages. Compared case-insensitively. */
 export const RESERVED_CODES: readonly string[] = [
   'api',
   'docs',
@@ -11,6 +11,13 @@ export const RESERVED_CODES: readonly string[] = [
   'openapi',
   'admin',
   'static',
+  // Web UI pages (current and planned) and SvelteKit's asset path.
+  'login',
+  'logout',
+  'links',
+  'settings',
+  'account',
+  '_app',
 ];
 
 export const Alias = z

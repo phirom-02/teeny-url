@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { Router } from 'express';
 import { db } from '../db/client.ts';
 import { logger } from '../lib/logger.ts';
+import { jsonCsp } from '../middleware/security.ts';
 import type { HealthResponse } from '../schemas/common.ts';
 
 /** A health probe should answer fast even when the database hangs. */
@@ -21,7 +22,7 @@ async function pingDatabase(): Promise<void> {
 
 export const healthRouter = Router();
 
-healthRouter.get('/health', async (req, res) => {
+healthRouter.get('/health', jsonCsp, async (req, res) => {
   let dbUp = true;
   try {
     await pingDatabase();

@@ -84,16 +84,24 @@ describe('POST /api/links', () => {
       expect(res.headers.location).toBe('/api/links/launch-day');
     });
 
-    it.each(['abc', 'A_b-9', 'x'.repeat(32), 'apis', 'docs-page', 'Health2'])(
-      'accepts the valid alias %s',
-      async (alias) => {
-        const { auth } = await createTestKey();
+    it.each([
+      'abc',
+      'A_b-9',
+      'x'.repeat(32),
+      'apis',
+      'docs-page',
+      'Health2',
+      // Only exact reserved words are blocked, not words that merely contain them.
+      'login-help',
+      'my_links',
+      '_apps',
+    ])('accepts the valid alias %s', async (alias) => {
+      const { auth } = await createTestKey();
 
-        const link = await createLink(auth, { url: TARGET, alias });
+      const link = await createLink(auth, { url: TARGET, alias });
 
-        expect(link.code).toBe(alias);
-      },
-    );
+      expect(link.code).toBe(alias);
+    });
 
     it('treats aliases as case-sensitive', async () => {
       const { auth } = await createTestKey();
@@ -139,17 +147,33 @@ describe('POST /api/links', () => {
       expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
     });
 
-    it.each(['api', 'docs', 'health', 'openapi', 'admin', 'static', 'API', 'Docs', 'HeAlTh'])(
-      'rejects the reserved alias %s',
-      async (alias) => {
-        const { auth } = await createTestKey();
+    it.each([
+      'api',
+      'docs',
+      'health',
+      'openapi',
+      'admin',
+      'static',
+      'API',
+      'Docs',
+      'HeAlTh',
+      // Web UI pages and SvelteKit's asset path.
+      'login',
+      'logout',
+      'links',
+      'settings',
+      'account',
+      '_app',
+      'LOGIN',
+      'LogOut',
+    ])('rejects the reserved alias %s', async (alias) => {
+      const { auth } = await createTestKey();
 
-        const res = await api().post('/api/links').set(auth).send({ url: TARGET, alias });
+      const res = await api().post('/api/links').set(auth).send({ url: TARGET, alias });
 
-        const details = expectValidationError(res);
-        expect(details.map((d) => d.path)).toContain('alias');
-      },
-    );
+      const details = expectValidationError(res);
+      expect(details.map((d) => d.path)).toContain('alias');
+    });
 
     it.each([
       ['too short', 'ab'],

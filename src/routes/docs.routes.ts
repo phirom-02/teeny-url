@@ -3,6 +3,7 @@ import { apiReference } from '@scalar/express-api-reference';
 import { type Request, type RequestHandler, type Response, Router } from 'express';
 import helmet from 'helmet';
 import { env } from '../env.ts';
+import { jsonCsp } from '../middleware/security.ts';
 import { buildOpenApiDocument } from '../openapi.ts';
 
 const OPENAPI_PATH = '/openapi.json';
@@ -11,8 +12,8 @@ const OPENAPI_PATH = '/openapi.json';
 const apiOrigin = new URL(env.BASE_URL).origin;
 
 /**
- * `/docs` loads Scalar's single-file bundle from jsDelivr. Instead of loosening the app-wide
- * policy, this route replaces helmet's default CSP with one that allows exactly what Scalar needs:
+ * `/docs` loads Scalar's single-file bundle from jsDelivr. There is no app-wide CSP (the web UI
+ * sends its own), so this route sets a policy that allows exactly what Scalar needs:
  * - scripts: only the two `<script>` tags Scalar renders, authorized by a per-request nonce
  *   (passing a nonce also makes Scalar pick its UMD bundle, which loads no follow-up chunks);
  * - styles: inline `<style>`/`style=""` (Scalar injects its stylesheet and uses style attributes);
@@ -65,7 +66,7 @@ const renderDocs: RequestHandler = (req, res, next) => {
 
 export const docsRouter = Router();
 
-docsRouter.get(OPENAPI_PATH, (_req, res) => {
+docsRouter.get(OPENAPI_PATH, jsonCsp, (_req, res) => {
   res.json(buildOpenApiDocument());
 });
 
