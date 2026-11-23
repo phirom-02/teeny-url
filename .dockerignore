@@ -1,0 +1,30 @@
+# Dependencies
+node_modules
+**/node_modules
+
+# Build outputs (rebuilt cleanly inside Docker)
+dist
+**/dist
+
+# Environment & secrets
+.env
+.env.*
+
+# Git & editor files
+.git
+.gitignore
+.vscode
+.idea
+
+# Docker files
+Dockerfile*
+.dockerignore
+compose*.yml
+docker-compose*.yml
+docker/
+
+# Tests, docs, and non-runtime directories
+coverage
+**/*.test.ts
+**/*.spec.ts
+*.md

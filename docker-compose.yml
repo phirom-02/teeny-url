@@ -18,5 +18,23 @@ services:
       timeout: 3s
       retries: 10
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: teeny-url-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      BASE_URL: http://localhost:8080
+      DATABASE_URL: postgresql://${POSTGRES_USER:-teeny}:${POSTGRES_PASSWORD:-teeny}@postgres:5432/${POSTGRES_DB:-teeny_url}
+    ports:
+      - "127.0.0.1:3000:3000" # localhost only (for reverse proxy)
+
 volumes:
   teeny_url_pgdata:

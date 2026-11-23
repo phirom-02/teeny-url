@@ -23,11 +23,7 @@
     "db:studio": "drizzle-kit studio",
     "key:create": "node --env-file-if-exists=.env scripts/keys.ts create",
     "key:list": "node --env-file-if-exists=.env scripts/keys.ts list",
-    "key:revoke": "node --env-file-if-exists=.env scripts/keys.ts revoke",
-    "docker:up": "docker compose up -d --wait",
-    "docker:down": "docker compose down",
-    "roadmap": "node learning/serve-roadmap.mjs",
-    "roadmap:build": "node learning/build-roadmap-html.mjs"
+    "key:revoke": "node --env-file-if-exists=.env scripts/keys.ts revoke"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^9.1.0",
