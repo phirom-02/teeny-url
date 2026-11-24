@@ -68,3 +68,41 @@ const recentLinkItems = recent.links.map((link) => (
 
 <ul>{recentLinkItems}</ul>
 ```
+
+### 3. Function export style (components vs hooks/utils)
+- **React components (exception):** all React components must use traditional function declarations (`export function ComponentName(...) {}` or `export default function ComponentName(...) {}`).
+- **shadcn/ui primitives (`web/src/components/ui/*`):** keep imported shadcn/ui components as-is; do not rewrite their generated structure or export style.
+- **Hooks, utilities, and other non-component functions (`web/src/lib/*`, custom hooks, helpers, etc.):**
+  - **Default export:** use a traditional function declaration (`export default function ...`).
+  - **Named export:** use an arrow function (`export const ... = (...) => { ... };`).
+
+**Avoid:**
+```ts
+// React component using arrow function
+export const CopyButton = ({ text }: CopyButtonProps) => {
+  return <Button>{text}</Button>;
+};
+
+// Named utility/hook using function declaration
+export function formatClicks(count: number): string {
+  return `${count} clicks`;
+}
+```
+
+**Prefer:**
+```tsx
+// React component: traditional function declaration
+export function CopyButton({ text }: CopyButtonProps) {
+  return <Button>{text}</Button>;
+}
+
+// Named utility/hook: arrow function
+export const formatClicks = (count: number): string => {
+  return `${count} clicks`;
+};
+
+// Default-exported utility/hook: traditional function declaration
+export default function useDebounce<T>(value: T, delayMs: number): T {
+  // ...
+}
+```

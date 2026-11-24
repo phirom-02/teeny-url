@@ -1,7 +1,7 @@
 import type * as React from 'react';
 import { cn } from '@/lib/utils';
 
-export function Card({ className, ...props }: React.ComponentProps<'div'>) {
+export const Card = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return (
     <div
       data-slot="card"
@@ -9,9 +9,9 @@ export function Card({ className, ...props }: React.ComponentProps<'div'>) {
       {...props}
     />
   );
-}
+};
 
-export function CardHeader({ className, ...props }: React.ComponentProps<'div'>) {
+export const CardHeader = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return (
     <div
       data-slot="card-header"
@@ -19,9 +19,9 @@ export function CardHeader({ className, ...props }: React.ComponentProps<'div'>)
       {...props}
     />
   );
-}
+};
 
-export function CardTitle({ className, ...props }: React.ComponentProps<'h2'>) {
+export const CardTitle = ({ className, ...props }: React.ComponentProps<'h2'>) => {
   return (
     <h2
       data-slot="card-title"
@@ -29,9 +29,9 @@ export function CardTitle({ className, ...props }: React.ComponentProps<'h2'>) {
       {...props}
     />
   );
-}
+};
 
-export function CardDescription({ className, ...props }: React.ComponentProps<'p'>) {
+export const CardDescription = ({ className, ...props }: React.ComponentProps<'p'>) => {
   return (
     <p
       data-slot="card-description"
@@ -39,13 +39,13 @@ export function CardDescription({ className, ...props }: React.ComponentProps<'p
       {...props}
     />
   );
-}
+};
 
-export function CardContent({ className, ...props }: React.ComponentProps<'div'>) {
+export const CardContent = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return <div data-slot="card-content" className={cn('p-6 pt-0', className)} {...props} />;
-}
+};
 
-export function CardFooter({ className, ...props }: React.ComponentProps<'div'>) {
+export const CardFooter = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return (
     <div
       data-slot="card-footer"
@@ -53,4 +53,4 @@ export function CardFooter({ className, ...props }: React.ComponentProps<'div'>)
       {...props}
     />
   );
-}
+};

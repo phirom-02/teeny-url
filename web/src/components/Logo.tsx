@@ -1,4 +1,4 @@
-export function Logo() {
+export const Logo = () => {
   return (
     <svg
       className="size-7 shrink-0 block"
@@ -19,4 +19,4 @@ export function Logo() {
       </g>
     </svg>
   );
-}
+};

@@ -66,10 +66,10 @@ function toIssues(details: unknown[]): ValidationIssue[] {
  * Calls the same-origin Teeny-URL JSON API using the browser's `httpOnly` session cookie.
  * Never throws for HTTP or transport failures; returns a typed discriminated union.
  */
-export async function apiRequest<T>(
+export const apiRequest = async <T>(
   path: `/api/${string}`,
   init: RequestInitOptions = {},
-): Promise<ApiResult<T>> {
+): Promise<ApiResult<T>> => {
   const headers = new Headers({ Accept: 'application/json' });
   let body: string | undefined;
 
@@ -127,24 +127,24 @@ export async function apiRequest<T>(
       message: `The Teeny-URL API sent an unexpected response (HTTP ${response.status}).`,
     },
   };
-}
+};
 
-export function getMe(): Promise<ApiResult<Me>> {
+export const getMe = (): Promise<ApiResult<Me>> => {
   return apiRequest<Me>('/api/me');
-}
+};
 
-export function createSession(key: string): Promise<ApiResult<Me>> {
+export const createSession = (key: string): Promise<ApiResult<Me>> => {
   return apiRequest<Me>('/api/session', { method: 'POST', body: { key } });
-}
+};
 
-export function deleteSession(): Promise<ApiResult<undefined>> {
+export const deleteSession = (): Promise<ApiResult<undefined>> => {
   return apiRequest<undefined>('/api/session', { method: 'DELETE' });
-}
+};
 
-export function listLinks(limit = 5, offset = 0): Promise<ApiResult<LinkList>> {
+export const listLinks = (limit = 5, offset = 0): Promise<ApiResult<LinkList>> => {
   return apiRequest<LinkList>(`/api/links?limit=${limit}&offset=${offset}`);
-}
+};
 
-export function createLink(body: CreateLinkBody): Promise<ApiResult<Link>> {
+export const createLink = (body: CreateLinkBody): Promise<ApiResult<Link>> => {
   return apiRequest<Link>('/api/links', { method: 'POST', body });
-}
+};
