@@ -10,7 +10,7 @@ import type { ErrorCode } from './lib/errors.ts';
 import type { ValidationIssue } from './middleware/error-handler.ts';
 import { RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } from './middleware/rate-limit.ts';
 import { ErrorResponse, HealthResponse, RootResponse } from './schemas/common.ts';
-import { MeResponse } from './schemas/keys.ts';
+import { CreateSessionBody, MeResponse } from './schemas/keys.ts';
 import { CodeParams, CreateLinkBody, Link, LinkList, ListLinksQuery } from './schemas/links.ts';
 import { LinkStats } from './schemas/stats.ts';
 
@@ -34,6 +34,8 @@ The key (\`tny_…\`) is printed once and only its hash is stored. Send it on ev
 \`\`\`http
 Authorization: Bearer <key>
 \`\`\`
+
+The browser web UI alternatively authenticates via an \`httpOnly\` \`teeny_key\` session cookie managed by \`POST /api/session\` and \`DELETE /api/session\` (with same-origin \`Origin\` CSRF checks on mutations).
 
 Links are private to the key that created them; other keys' links respond \`404\`.
 Redirects (\`GET /{code}\`), \`GET /api\` and the health/docs endpoints are public.
@@ -86,6 +88,11 @@ const responses = {
     'Missing, malformed, unknown or revoked API key',
     'UNAUTHORIZED',
     'Invalid or revoked API key',
+  ),
+  forbidden: error(
+    'Cross-origin or missing-Origin request rejected on a cookie-authenticated or session endpoint',
+    'FORBIDDEN',
+    'Cross-origin request rejected',
   ),
   linkNotFound: error(
     'No link with this code exists for your API key',
@@ -163,6 +170,44 @@ function buildRegistry(): OpenAPIRegistry {
     },
   });
 
+  registry.registerPath({
+    method: 'post',
+    path: '/api/session',
+    tags: ['Account'],
+    operationId: 'createSession',
+    summary: 'Sign in (browser session)',
+    description:
+      'Validates an API key and sets the httpOnly `teeny_key` session cookie for the web UI. Requires a same-origin `Origin` header.',
+    request: {
+      body: {
+        required: true,
+        content: { 'application/json': { schema: CreateSessionBody } },
+      },
+    },
+    responses: {
+      200: json('The authenticated API key', MeResponse),
+      400: responses.validation,
+      401: responses.unauthorized,
+      403: responses.forbidden,
+      429: responses.rateLimited,
+    },
+  });
+
+  registry.registerPath({
+    method: 'delete',
+    path: '/api/session',
+    tags: ['Account'],
+    operationId: 'deleteSession',
+    summary: 'Sign out (browser session)',
+    description:
+      'Clears the httpOnly `teeny_key` session cookie from the browser. The API key itself remains active. Requires a same-origin `Origin` header.',
+    responses: {
+      204: { description: 'Session cookie cleared' },
+      403: responses.forbidden,
+      429: responses.rateLimited,
+    },
+  });
+
   // ── Links ─────────────────────────────────────────────────────────────────
   registry.registerPath({
     method: 'post',
@@ -182,6 +227,7 @@ function buildRegistry(): OpenAPIRegistry {
       201: json('The created link', Link),
       400: responses.validation,
       401: responses.unauthorized,
+      403: responses.forbidden,
       409: error(
         'The alias is already in use',
         'ALIAS_TAKEN',
@@ -240,6 +286,7 @@ function buildRegistry(): OpenAPIRegistry {
       204: { description: 'The link was deleted' },
       400: responses.validation,
       401: responses.unauthorized,
+      403: responses.forbidden,
       404: responses.linkNotFound,
       429: responses.rateLimited,
     },
@@ -313,7 +360,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
     servers: [{ url: env.BASE_URL }],
     tags: [
       { name: 'Links', description: 'Create and manage your short links (API key required)' },
-      { name: 'Account', description: 'The API key you are calling with (API key required)' },
+      { name: 'Account', description: 'The API key you are calling with and browser sessions' },
       { name: 'Redirect', description: 'Public short-link redirects' },
       { name: 'System', description: 'Service info and health' },
     ],

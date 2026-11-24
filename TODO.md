@@ -29,25 +29,24 @@ Actionable backlog for **Teeny-URL**, organized by priority and area.
 
 Migrate `@teeny-url/web` (`web/`) from SvelteKit 3 + Svelte 5 + `adapter-node` to **React + Tailwind CSS + shadcn/ui + TanStack Router + TanStack Form + Zod**.
 
-- [ ] **Decide serving & auth architecture with Express (`src/server.ts`, `src/app.ts`):**
-  - Choose between a static React SPA served by Express (`express.static` + SPA fallback after `redirectRouter`) vs. an SSR Node handler mounted like the current `web/build/handler.js`.
-  - Keep the API key out of `localStorage`/client JS: if moving to a client-side SPA, add cookie-based session/auth endpoints on the API (e.g. `POST /api/auth/login`, `POST /api/auth/logout` with `httpOnly`, `SameSite=Lax` cookies — pairs well with opaque server-side sessions in Section 5) and CSRF protection.
-  - Preserve Express routing order (`/health`, `/docs`, `/api/*`, `/:code`, then UI fallback), `RESERVED_CODES`, `Cache-Control: private, no-store` for authenticated views, and strict CSP (`script-src 'self'`, `style-src 'self'`).
-- [ ] **Scaffold React + Vite + Tailwind CSS + shadcn/ui in `web/`:**
-  - Replace SvelteKit/Svelte/adapter-node/svelte-check dependencies in `web/package.json` with `react`, `react-dom`, `@vitejs/plugin-react`, `tailwindcss`, `@tanstack/react-router`, `@tanstack/react-form`, and `zod`.
-  - Configure Tailwind CSS, shadcn/ui (`components.json`, theme tokens with light/dark support, base primitives: `Button`, `Input`, `Label`, `Card`, `Badge`, `Alert`), and path aliases in `web/tsconfig.json` and `web/vite.config.ts`.
-  - Update root `package.json` (`typecheck`, `build`, `dev:web`), `biome.json` (enable Biome linting/formatting on `.tsx`), and `.dockerignore` / `Dockerfile` for the new build output.
-- [ ] **Set up TanStack Router (`@tanstack/react-router`):**
-  - Configure type-safe routing (file-based via `@tanstack/router-plugin` or route tree) with root layout (header, logo, API docs link, active key badge, sign-out control), auth route guard (`beforeLoad` redirecting signed-out users to `/login`), and styled 404 / error boundary views (`NotFound` for unknown short codes and missing routes).
-  - Reserve top-level route paths in `RESERVED_CODES` (`src/schemas/links.ts`) as new routes are added.
-- [ ] **Migrate existing pages & forms with TanStack Form + Zod:**
-  - Share Zod contracts/types from `src/schemas/` (keeping the API-client-only boundary — no DB or server runtime imports in `web/`).
+- [x] **Decide serving & auth architecture with Express (`src/server.ts`, `src/app.ts`):**
+  - Serve static React SPA (`web/dist`) directly from Express via `src/middleware/ui-static.ts` (strict `script-src 'self'` / `style-src 'self'` CSP, immutable `/assets/*` caching, HTTP 200 for known SPA routes, HTTP 404 for unknown paths/short codes).
+  - Keep API keys out of `localStorage`/client JS using `httpOnly`, `SameSite=Lax` cookie sessions (`POST /api/session`, `DELETE /api/session`) with same-origin `Origin` CSRF enforcement (`403 FORBIDDEN`) on session endpoints and cookie-authenticated mutations.
+  - Preserve Express routing order (`/health`, `/docs`, `/api/*`, `/:code`, then UI fallback), `RESERVED_CODES`, `Cache-Control: private, no-store` on authenticated responses, and strict CSP.
+- [x] **Scaffold React + Vite + Tailwind CSS + shadcn/ui in `web/`:**
+  - Replace SvelteKit/Svelte/adapter-node/svelte-check dependencies in `web/package.json` with `react`, `react-dom`, `@vitejs/plugin-react`, `tailwindcss`, `@tailwindcss/vite`, `@tanstack/react-router`, `@tanstack/react-form`, and `zod`.
+  - Configure Tailwind CSS v4, shadcn/ui (`web/components.json`, theme tokens with OS light/dark support, base primitives: `Button`, `Input`, `Label`, `Card`, `Badge`, `Alert`), and `@/` path aliases in `web/tsconfig.json` and `web/vite.config.ts`.
+  - Update `biome.json` (lint/format `.tsx` and Tailwind v4 CSS), `.dockerignore`, and `Dockerfile` (`web/dist`).
+- [x] **Set up TanStack Router (`@tanstack/react-router`):**
+  - Configure type-safe routing (`web/src/router.tsx`) with `RootLayout` (header, logo, API docs link, active key badge, sign-out control), auth route guards (`beforeLoad` redirecting signed-out users to `/login`), and styled `NotFoundPage` / `ErrorPage` views.
+- [x] **Migrate existing pages & forms with TanStack Form + Zod:**
+  - Share type-only API contracts via `web/src/lib/types.ts` and client Zod 4 form schemas in `web/src/lib/schemas.ts`.
   - **`/login`:** API key sign-in form using `@tanstack/react-form` + Zod validation, surfacing API errors cleanly and redirecting to `/` on success.
-  - **`/`:** Shorten URL + optional custom alias form using `@tanstack/react-form` + Zod (matching `CreateLinkBody` rules), result card with `CopyButton`, and the 5 most recent links list with click counts.
-  - **API client layer (`web/src/lib/api.ts`):** Typed `fetch` wrapper handling `{ error: { code, message, details? } }` envelopes, `401` sign-out redirects, `429` rate-limit notices, and `503` API-unreachable states.
-- [ ] **Update tests, Docker & agent documentation:**
-  - Update `tests/web.e2e.test.ts` (and `tests/ui.test.ts` if mounting behavior changes) to verify the new React build, cookies/auth, CSP headers, and error pages.
-  - Update `AGENTS.md`, `README.md`, and `.agentic-workflows/agents/web-engineer.md` (plus `code-reviewer.md`) to reflect the React + Tailwind + shadcn/ui + TanStack stack.
+  - **`/`:** Shorten URL + optional custom alias form using `@tanstack/react-form` + Zod, result card with `CopyButton`, and the 5 most recent links list with click counts.
+  - **API client layer (`web/src/lib/api.ts`):** Typed `fetch` wrapper (`credentials: 'same-origin'`) handling `{ error: { code, message, details? } }` envelopes, `401` sign-out redirects, `429` rate-limit notices, and `503` API-unreachable states.
+- [x] **Update tests, Docker & agent documentation:**
+  - Updated `tests/web.e2e.test.ts` to verify the real `web/dist` React build, session cookies, CSRF protection, CSP headers, static assets, and unknown short code 404s.
+  - Updated `AGENTS.md`, `README.md`, and `.agentic-workflows/agents/*` (`web-engineer.md`, `api-engineer.md`, `code-reviewer.md`, `test-engineer.md`).
 
 ---
 
