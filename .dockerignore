@@ -5,6 +5,10 @@ node_modules
 # Build outputs (rebuilt cleanly inside Docker)
 dist
 **/dist
+web/build
+web/.svelte-kit
+tests/
+skills/
 
 # Environment & secrets
 .env

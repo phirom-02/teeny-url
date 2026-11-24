@@ -3,7 +3,7 @@ FROM node:24-slim AS builder
 WORKDIR /app
 
 # Enable pnpm
-RUN npm install -g pnpm
+RUN corepack enable && corepack prepare pnpm@12.5.1 --activate
 
 # Copy workspace manifests first for dependency layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
