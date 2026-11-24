@@ -1,5 +1,6 @@
-import { useForm } from '@tanstack/react-form';
+import { useField, useForm, useStore } from '@tanstack/react-form';
 import { useNavigate } from '@tanstack/react-router';
+import type { ChangeEvent, FormEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -25,6 +26,10 @@ function firstError(errors: unknown[]): string | null {
   return null;
 }
 
+function selectIsSubmitting(state: { isSubmitting: boolean }): boolean {
+  return state.isSubmitting;
+}
+
 interface LoginPageProps {
   onSignedIn: (user: Me) => void;
 }
@@ -39,37 +44,59 @@ export function LoginPage({ onSignedIn }: LoginPageProps) {
     document.title = 'Sign in · Teeny-URL';
   }, []);
 
+  async function handleLoginSubmit({ value }: { value: { key: string } }) {
+    setServerKeyError(null);
+    setServerMessage(null);
+
+    const trimmed = value.key.trim();
+    const result = await createSession(trimmed);
+    if (result.ok) {
+      onSignedIn(result.data);
+      await navigate({ to: '/', replace: true });
+      return;
+    }
+
+    if (result.status === 401) {
+      setServerKeyError(result.error.message);
+    } else if (result.status === 400) {
+      const keyIssue = result.error.details?.find((issue) => issue.path === 'key');
+      if (keyIssue) setServerKeyError(keyIssue.message);
+      else setServerMessage(result.error.message);
+    } else {
+      setServerMessage(result.error.message);
+    }
+
+    form.setFieldValue('key', '');
+    keyInputRef.current?.focus();
+  }
+
   const form = useForm({
     defaultValues: { key: '' },
     validators: {
       onSubmit: loginFormSchema,
     },
-    onSubmit: async ({ value }) => {
-      setServerKeyError(null);
-      setServerMessage(null);
-
-      const trimmed = value.key.trim();
-      const result = await createSession(trimmed);
-      if (result.ok) {
-        onSignedIn(result.data);
-        await navigate({ to: '/', replace: true });
-        return;
-      }
-
-      if (result.status === 401) {
-        setServerKeyError(result.error.message);
-      } else if (result.status === 400) {
-        const keyIssue = result.error.details?.find((issue) => issue.path === 'key');
-        if (keyIssue) setServerKeyError(keyIssue.message);
-        else setServerMessage(result.error.message);
-      } else {
-        setServerMessage(result.error.message);
-      }
-
-      form.setFieldValue('key', '');
-      keyInputRef.current?.focus();
-    },
+    onSubmit: handleLoginSubmit,
   });
+
+  const keyField = useField({ form, name: 'key' });
+  const isSubmitting = useStore(form.store, selectIsSubmitting);
+
+  function handleFormSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    void form.handleSubmit();
+  }
+
+  function handleKeyChange(event: ChangeEvent<HTMLInputElement>) {
+    setServerKeyError(null);
+    keyField.handleChange(event.target.value);
+  }
+
+  const validationError =
+    keyField.state.meta.isTouched || form.state.submissionAttempts > 0
+      ? firstError(keyField.state.meta.errors)
+      : null;
+  const errorText = serverKeyError ?? validationError;
 
   return (
     <Card className="mx-auto max-w-md">
@@ -81,54 +108,31 @@ export function LoginPage({ onSignedIn }: LoginPageProps) {
       </CardHeader>
 
       <CardContent className="grid gap-5">
-        <form
-          className="grid gap-4"
-          noValidate
-          onSubmit={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void form.handleSubmit();
-          }}
-        >
-          <form.Field name="key">
-            {(field) => {
-              const validationError =
-                field.state.meta.isTouched || form.state.submissionAttempts > 0
-                  ? firstError(field.state.meta.errors)
-                  : null;
-              const errorText = serverKeyError ?? validationError;
-
-              return (
-                <div className="grid gap-2">
-                  <Label htmlFor="key">API key</Label>
-                  <Input
-                    ref={keyInputRef}
-                    id="key"
-                    name={field.name}
-                    type="password"
-                    className="font-mono"
-                    required
-                    autoFocus
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    placeholder="tny_…"
-                    value={field.state.value}
-                    onBlur={field.handleBlur}
-                    onChange={(event) => {
-                      setServerKeyError(null);
-                      field.handleChange(event.target.value);
-                    }}
-                    aria-invalid={errorText ? 'true' : undefined}
-                    aria-describedby={errorText ? 'key-hint key-error' : 'key-hint'}
-                  />
-                  <p id="key-error" className="min-h-4 text-xs text-destructive" aria-live="polite">
-                    {errorText ?? ''}
-                  </p>
-                </div>
-              );
-            }}
-          </form.Field>
+        <form className="grid gap-4" noValidate onSubmit={handleFormSubmit}>
+          <div className="grid gap-2">
+            <Label htmlFor="key">API key</Label>
+            <Input
+              ref={keyInputRef}
+              id="key"
+              name={keyField.name}
+              type="password"
+              className="font-mono"
+              required
+              autoFocus
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="tny_…"
+              value={keyField.state.value}
+              onBlur={keyField.handleBlur}
+              onChange={handleKeyChange}
+              aria-invalid={errorText ? 'true' : undefined}
+              aria-describedby={errorText ? 'key-hint key-error' : 'key-hint'}
+            />
+            <p id="key-error" className="min-h-4 text-xs text-destructive" aria-live="polite">
+              {errorText ?? ''}
+            </p>
+          </div>
 
           {serverMessage && (
             <Alert variant="destructive">
@@ -136,13 +140,9 @@ export function LoginPage({ onSignedIn }: LoginPageProps) {
             </Alert>
           )}
 
-          <form.Subscribe selector={(state) => state.isSubmitting}>
-            {(isSubmitting) => (
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Signing in…' : 'Sign in'}
-              </Button>
-            )}
-          </form.Subscribe>
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting ? 'Signing in…' : 'Sign in'}
+          </Button>
         </form>
 
         <p id="key-hint" className="text-xs leading-relaxed text-muted-foreground">

@@ -1,28 +1,21 @@
-import { useForm } from '@tanstack/react-form';
+import { useField, useForm, useStore } from '@tanstack/react-form';
 import { useNavigate } from '@tanstack/react-router';
 import { Check } from 'lucide-react';
+import type { ChangeEvent, FormEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { CopyButton } from '@/components/CopyButton';
+import { RecentLinkItem } from '@/components/RecentLinkItem';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createLink, listLinks } from '@/lib/api';
+import { formatNumber, withoutScheme } from '@/lib/format';
 import { shortenFormSchema } from '@/lib/schemas';
 import type { CreateLinkBody, Link, Me, ValidationIssue } from '@/lib/types';
 
 const RECENT_LIMIT = 5;
-const numbers = new Intl.NumberFormat('en');
-
-function withoutScheme(url: string): string {
-  return url.replace(/^https?:\/\//, '');
-}
-
-function formatClicks(count: number): string {
-  return `${numbers.format(count)} ${count === 1 ? 'click' : 'clicks'}`;
-}
 
 function firstError(errors: unknown[]): string | null {
   for (const err of errors) {
@@ -37,6 +30,10 @@ function firstError(errors: unknown[]): string | null {
     }
   }
   return null;
+}
+
+function selectIsSubmitting(state: { isSubmitting: boolean }): boolean {
+  return state.isSubmitting;
 }
 
 type FieldErrors = { url?: string; alias?: string };
@@ -97,54 +94,92 @@ export function HomePage({ initialRecent, onSignedOut }: HomePageProps) {
     }
   }
 
+  async function handleShortenSubmit({ value }: { value: { url: string; alias: string } }) {
+    setServerErrors({});
+    setServerMessage(null);
+
+    const trimmedUrl = value.url.trim();
+    const trimmedAlias = value.alias.trim();
+    const body: CreateLinkBody = trimmedAlias
+      ? { url: trimmedUrl, alias: trimmedAlias }
+      : { url: trimmedUrl };
+
+    const result = await createLink(body);
+    if (result.ok) {
+      setCreated(result.data);
+      form.reset();
+      await refreshRecent();
+      return;
+    }
+
+    if (result.status === 401) {
+      onSignedOut(null);
+      await navigate({ to: '/login', replace: true });
+      return;
+    }
+
+    if (result.status === 409) {
+      setServerErrors({ alias: result.error.message });
+      aliasInputRef.current?.focus();
+      return;
+    }
+
+    if (result.status === 400) {
+      const { errors, other } = mapValidationIssues(result.error.details);
+      setServerErrors(errors);
+      const msg = other.join(' ') || (errors.url || errors.alias ? null : result.error.message);
+      setServerMessage(msg);
+      if (errors.url) urlInputRef.current?.focus();
+      else if (errors.alias) aliasInputRef.current?.focus();
+      return;
+    }
+
+    setServerMessage(result.error.message);
+  }
+
   const form = useForm({
     defaultValues: { url: '', alias: '' },
     validators: {
       onSubmit: shortenFormSchema,
     },
-    onSubmit: async ({ value }) => {
-      setServerErrors({});
-      setServerMessage(null);
-
-      const trimmedUrl = value.url.trim();
-      const trimmedAlias = value.alias.trim();
-      const body: CreateLinkBody = trimmedAlias
-        ? { url: trimmedUrl, alias: trimmedAlias }
-        : { url: trimmedUrl };
-
-      const result = await createLink(body);
-      if (result.ok) {
-        setCreated(result.data);
-        form.reset();
-        await refreshRecent();
-        return;
-      }
-
-      if (result.status === 401) {
-        onSignedOut(null);
-        await navigate({ to: '/login', replace: true });
-        return;
-      }
-
-      if (result.status === 409) {
-        setServerErrors({ alias: result.error.message });
-        aliasInputRef.current?.focus();
-        return;
-      }
-
-      if (result.status === 400) {
-        const { errors, other } = mapValidationIssues(result.error.details);
-        setServerErrors(errors);
-        const msg = other.join(' ') || (errors.url || errors.alias ? null : result.error.message);
-        setServerMessage(msg);
-        if (errors.url) urlInputRef.current?.focus();
-        else if (errors.alias) aliasInputRef.current?.focus();
-        return;
-      }
-
-      setServerMessage(result.error.message);
-    },
+    onSubmit: handleShortenSubmit,
   });
+
+  const urlField = useField({ form, name: 'url' });
+  const aliasField = useField({ form, name: 'alias' });
+  const isSubmitting = useStore(form.store, selectIsSubmitting);
+
+  function handleFormSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    void form.handleSubmit();
+  }
+
+  function handleUrlChange(event: ChangeEvent<HTMLInputElement>) {
+    setServerErrors((prev) => ({ ...prev, url: undefined }));
+    urlField.handleChange(event.target.value);
+  }
+
+  function handleAliasChange(event: ChangeEvent<HTMLInputElement>) {
+    setServerErrors((prev) => ({ ...prev, alias: undefined }));
+    aliasField.handleChange(event.target.value);
+  }
+
+  const urlValidationError =
+    urlField.state.meta.isTouched || form.state.submissionAttempts > 0
+      ? firstError(urlField.state.meta.errors)
+      : null;
+  const urlErrorText = serverErrors.url ?? urlValidationError;
+
+  const aliasValidationError =
+    aliasField.state.meta.isTouched || form.state.submissionAttempts > 0
+      ? firstError(aliasField.state.meta.errors)
+      : null;
+  const aliasErrorText = serverErrors.alias ?? aliasValidationError;
+
+  const recentLinkItems = recent.links.map((link) => (
+    <RecentLinkItem key={link.code} link={link} />
+  ));
 
   return (
     <div className="grid gap-8">
@@ -157,115 +192,68 @@ export function HomePage({ initialRecent, onSignedOut }: HomePageProps) {
 
       <Card>
         <CardContent className="pt-6">
-          <form
-            className="grid gap-5"
-            noValidate
-            onSubmit={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void form.handleSubmit();
-            }}
-          >
-            <form.Field name="url">
-              {(field) => {
-                const validationError =
-                  field.state.meta.isTouched || form.state.submissionAttempts > 0
-                    ? firstError(field.state.meta.errors)
-                    : null;
-                const errorText = serverErrors.url ?? validationError;
+          <form className="grid gap-5" noValidate onSubmit={handleFormSubmit}>
+            <div className="grid gap-2">
+              <Label htmlFor="url">Long URL</Label>
+              <Input
+                ref={urlInputRef}
+                id="url"
+                name={urlField.name}
+                type="url"
+                required
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="https://example.com/a/very/long/path"
+                value={urlField.state.value}
+                onBlur={urlField.handleBlur}
+                onChange={handleUrlChange}
+                aria-invalid={urlErrorText ? 'true' : undefined}
+                aria-describedby={urlErrorText ? 'url-error' : undefined}
+              />
+              <p id="url-error" className="min-h-4 text-xs text-destructive" aria-live="polite">
+                {urlErrorText ?? ''}
+              </p>
+            </div>
 
-                return (
-                  <div className="grid gap-2">
-                    <Label htmlFor="url">Long URL</Label>
-                    <Input
-                      ref={urlInputRef}
-                      id="url"
-                      name={field.name}
-                      type="url"
-                      required
-                      autoFocus
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="https://example.com/a/very/long/path"
-                      value={field.state.value}
-                      onBlur={field.handleBlur}
-                      onChange={(event) => {
-                        setServerErrors((prev) => ({ ...prev, url: undefined }));
-                        field.handleChange(event.target.value);
-                      }}
-                      aria-invalid={errorText ? 'true' : undefined}
-                      aria-describedby={errorText ? 'url-error' : undefined}
-                    />
-                    <p
-                      id="url-error"
-                      className="min-h-4 text-xs text-destructive"
-                      aria-live="polite"
-                    >
-                      {errorText ?? ''}
-                    </p>
-                  </div>
-                );
-              }}
-            </form.Field>
-
-            <form.Field name="alias">
-              {(field) => {
-                const validationError =
-                  field.state.meta.isTouched || form.state.submissionAttempts > 0
-                    ? firstError(field.state.meta.errors)
-                    : null;
-                const errorText = serverErrors.alias ?? validationError;
-
-                return (
-                  <div className="grid gap-2">
-                    <Label htmlFor="alias">
-                      Custom alias{' '}
-                      <span className="font-normal text-muted-foreground">(optional)</span>
-                    </Label>
-                    <div className="flex items-stretch">
-                      <span
-                        aria-hidden="true"
-                        className="inline-flex items-center rounded-l-md border border-r-0 border-input bg-muted px-3 font-mono text-sm text-muted-foreground select-none"
-                      >
-                        {shortHost}/
-                      </span>
-                      <Input
-                        ref={aliasInputRef}
-                        id="alias"
-                        name={field.name}
-                        type="text"
-                        className="rounded-l-none font-mono"
-                        autoComplete="off"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                        maxLength={32}
-                        placeholder="launch-day"
-                        value={field.state.value}
-                        onBlur={field.handleBlur}
-                        onChange={(event) => {
-                          setServerErrors((prev) => ({ ...prev, alias: undefined }));
-                          field.handleChange(event.target.value);
-                        }}
-                        aria-invalid={errorText ? 'true' : undefined}
-                        aria-describedby={errorText ? 'alias-hint alias-error' : 'alias-hint'}
-                      />
-                    </div>
-                    <p id="alias-hint" className="text-xs text-muted-foreground">
-                      Your link becomes{' '}
-                      <span className="font-mono text-foreground">{shortHost}/your-alias</span>. Use
-                      3–32 letters, digits, “-” or “_”, or leave it empty for a random code.
-                    </p>
-                    <p
-                      id="alias-error"
-                      className="min-h-4 text-xs text-destructive"
-                      aria-live="polite"
-                    >
-                      {errorText ?? ''}
-                    </p>
-                  </div>
-                );
-              }}
-            </form.Field>
+            <div className="grid gap-2">
+              <Label htmlFor="alias">
+                Custom alias <span className="font-normal text-muted-foreground">(optional)</span>
+              </Label>
+              <div className="flex items-stretch">
+                <span
+                  aria-hidden="true"
+                  className="inline-flex items-center rounded-l-md border border-r-0 border-input bg-muted px-3 font-mono text-sm text-muted-foreground select-none"
+                >
+                  {shortHost}/
+                </span>
+                <Input
+                  ref={aliasInputRef}
+                  id="alias"
+                  name={aliasField.name}
+                  type="text"
+                  className="rounded-l-none font-mono"
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  maxLength={32}
+                  placeholder="launch-day"
+                  value={aliasField.state.value}
+                  onBlur={aliasField.handleBlur}
+                  onChange={handleAliasChange}
+                  aria-invalid={aliasErrorText ? 'true' : undefined}
+                  aria-describedby={aliasErrorText ? 'alias-hint alias-error' : 'alias-hint'}
+                />
+              </div>
+              <p id="alias-hint" className="text-xs text-muted-foreground">
+                Your link becomes{' '}
+                <span className="font-mono text-foreground">{shortHost}/your-alias</span>. Use 3–32
+                letters, digits, “-” or “_”, or leave it empty for a random code.
+              </p>
+              <p id="alias-error" className="min-h-4 text-xs text-destructive" aria-live="polite">
+                {aliasErrorText ?? ''}
+              </p>
+            </div>
 
             {serverMessage && (
               <Alert variant="destructive">
@@ -274,13 +262,9 @@ export function HomePage({ initialRecent, onSignedOut }: HomePageProps) {
             )}
 
             <div className="flex justify-end">
-              <form.Subscribe selector={(state) => state.isSubmitting}>
-                {(isSubmitting) => (
-                  <Button type="submit" className="w-full sm:w-auto" disabled={isSubmitting}>
-                    {isSubmitting ? 'Shortening…' : 'Shorten'}
-                  </Button>
-                )}
-              </form.Subscribe>
+              <Button type="submit" className="w-full sm:w-auto" disabled={isSubmitting}>
+                {isSubmitting ? 'Shortening…' : 'Shorten'}
+              </Button>
             </div>
           </form>
         </CardContent>
@@ -323,7 +307,7 @@ export function HomePage({ initialRecent, onSignedOut }: HomePageProps) {
           </h2>
           {recent.total > recent.links.length && (
             <p className="text-xs text-muted-foreground">
-              {recent.links.length} newest of {numbers.format(recent.total)}
+              {recent.links.length} newest of {formatNumber(recent.total)}
             </p>
           )}
         </div>
@@ -345,31 +329,7 @@ export function HomePage({ initialRecent, onSignedOut }: HomePageProps) {
           </Card>
         ) : (
           <Card className="overflow-hidden">
-            <ul className="divide-y divide-border">
-              {recent.links.map((link) => (
-                <li key={link.code} className="flex items-center justify-between gap-4 px-5 py-3.5">
-                  <div className="grid min-w-0 flex-1 gap-0.5">
-                    <a
-                      href={link.shortUrl}
-                      rel="external"
-                      className="font-mono font-semibold text-primary hover:underline break-all"
-                    >
-                      {withoutScheme(link.shortUrl)}
-                    </a>
-                    <span className="truncate text-sm text-muted-foreground" title={link.targetUrl}>
-                      <span className="sr-only">Redirects to </span>
-                      {link.targetUrl}
-                    </span>
-                  </div>
-                  <Badge
-                    variant="secondary"
-                    className="shrink-0 tabular-nums font-normal text-muted-foreground"
-                  >
-                    {formatClicks(link.clickCount)}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
+            <ul className="divide-y divide-border">{recentLinkItems}</ul>
           </Card>
         )}
       </section>

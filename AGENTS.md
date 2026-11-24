@@ -29,8 +29,8 @@ URL shortener: JSON API + React web UI.
 - `src/lib/` — errors, logger, short-code, URL, and API-key helpers. `scripts/keys.ts` — API key CLI.
 - `tests/` — Vitest + Supertest against `createApp()`; `apiWithUi()` (`tests/helpers.ts`) mounts a stub UI handler; `tests/web.e2e.test.ts` mounts the real `web/dist` static handler.
 - `web/vite.config.ts` — Vite 8 + React + Tailwind CSS v4 + `@/` alias + dev proxy to `API_ORIGIN` (defaults to `http://localhost:3000`).
-- `web/src/` — `main.tsx`, `router.tsx` (TanStack Router route tree), `index.css` (Tailwind v4 + shadcn/ui theme tokens), `lib/` (`api.ts` fetch client, `schemas.ts` / `types.ts`, `utils.ts` `cn`), `components/` (`ui/*` shadcn primitives, `Logo.tsx`, `CopyButton.tsx`), `routes/` (`RootLayout`, `HomePage`, `LoginPage`, `NotFoundPage`).
-- `.agentic-workflows/` — vendor-neutral agent workspace (`agents/` holds specialized role definitions with disjoint file ownership; `worktrees/` holds gitignored shared git worktrees for isolated parallel agent work; extensible for workflows, skills, and templates).
+- `web/src/` — `main.tsx`, `router.tsx` (TanStack Router route tree), `index.css` (Tailwind v4 + shadcn/ui theme tokens), `lib/` (`api.ts` fetch client, `format.ts`, `schemas.ts` / `types.ts`, `utils.ts` `cn`), `components/` (`ui/*` shadcn primitives, `Logo.tsx`, `CopyButton.tsx`, `RecentLinkItem.tsx`), `routes/` (`RootLayout`, `HomePage`, `LoginPage`, `NotFoundPage`, `ErrorPage`).
+- `.agentic-workflows/` — vendor-neutral agent workspace (`agents/` holds specialized role definitions with disjoint file ownership; `lints/lint.md` holds custom project lint rules beyond Biome; `worktrees/` holds gitignored shared git worktrees for isolated parallel agent work; extensible for workflows, skills, and templates).
 
 ## Conventions
 
@@ -53,6 +53,7 @@ URL shortener: JSON API + React web UI.
   - Use **TanStack Router** (`@tanstack/react-router`) for type-safe routing, auth route guards (`beforeLoad`), and 404/error views.
   - Use **TanStack Form** (`@tanstack/react-form`) + **Zod** for all forms and client-side validation, mapping API `400 VALIDATION_ERROR` (`details[]`) and `409 ALIAS_TAKEN` errors back to field/form errors.
   - Use **Tailwind CSS v4** and **shadcn/ui** components in `web/src/components/ui/` with `@/` path aliases (`web/tsconfig.json` & `web/vite.config.ts`). Follow OS light/dark theme tokens.
+- **Custom lint rules:** follow all rules in `.agentic-workflows/lints/lint.md`.
 - **CSP:** Express serves the UI with strict `script-src 'self'` and `style-src 'self'` (`frame-ancestors 'none'`). Never use inline `style="..."` attributes or inline `<script>` tags — use Tailwind utility classes or `web/src/index.css`.
 - **Style:** `.ts`, `.tsx`, and `.json` files in `web/` follow Biome (`pnpm lint` / `pnpm format`).
 
