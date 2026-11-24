@@ -341,7 +341,8 @@ If you change the Postgres port or credentials, update `DATABASE_URL` to match. 
 
 ```
 .
-├── .claude/agents/          # Claude Code sub-agent definitions
+├── .agentic-workflows/      # vendor-neutral agent workspace (agents/, gitignored worktrees/, future workflows)
+├── AGENTS.md                # shared project conventions for AI coding agents
 ├── docker-compose.yml       # Postgres 17 (teeny-url-postgres)
 ├── docker/postgres/init.sql # creates teeny_url_test on first container start
 ├── drizzle/                 # generated SQL migrations (never hand-edited)
@@ -413,28 +414,29 @@ Before committing, run `pnpm typecheck && pnpm lint && pnpm test`.
 
 Don't edit files in `drizzle/` by hand. If an unreleased migration is wrong, delete it and generate it again. Use `pnpm db:studio` to browse the data.
 
-### Working with Claude Code sub-agents
+### Working with AI coding agents
 
-`.claude/agents/` defines five sub-agents with disjoint file ownership, so they can work in parallel without conflicts. `CLAUDE.md` holds the shared conventions they all follow.
+`.agentic-workflows/agents/` defines six vendor-neutral agent roles with disjoint file ownership, so multiple agents can work in parallel without conflicts. `AGENTS.md` holds the shared conventions they all follow.
 
 | Agent | Use for | Owns |
 |---|---|---|
 | `db-architect` | Schema changes, migrations, indexes, non-trivial SQL | `src/db/**`, `drizzle/**` |
-| `api-engineer` | Routes, middleware, services, zod contracts, OpenAPI, key CLI, and the web UI | Per task, **either** the API (`src/**` except `src/db`, plus `scripts/**`) **or** the UI (`web/**`). It edits only the files its task assigns |
-| `test-engineer` | Writing and fixing tests, reproducing bugs as failing tests | `tests/**`, `vitest.config.ts`. It never edits `src/` and reports app bugs instead |
+| `api-engineer` | Express routes, middleware, services, zod contracts, OpenAPI, key CLI | `src/**` (except `src/db/**`), `scripts/**` |
+| `web-engineer` | SvelteKit pages, form actions, server API client, components, CSS | `web/**` |
+| `test-engineer` | Writing and fixing tests, E2E tests, reproducing bugs as failing tests | `tests/**`, `vitest.config.ts`. Never edits `src/` or `web/` |
 | `code-reviewer` | Pre-commit review of correctness, security, contracts and conventions; runs all checks | Nothing (read-only) |
-| `docs-writer` | README, CLAUDE.md, `.env.example`, OpenAPI descriptions | `*.md`, `.env.example`, `description`/`example` text in zod `.meta()` |
+| `docs-writer` | README, AGENTS.md, `.env.example`, OpenAPI descriptions | `*.md`, `.env.example`, `description`/`example` text in zod `.meta()` |
 
 **Delegation pattern for a feature:**
 
 1. `db-architect`, if the schema changes.
-2. `api-engineer` for the API contracts and routes. If the UI changes, a second `api-engineer` instance owns `web/**`; it can start in parallel once the zod contracts are settled.
-3. `test-engineer` in parallel with step 2. Its files don't overlap, and tests are written against the zod contracts.
-4. The main agent integrates the work until `pnpm typecheck && pnpm lint && pnpm test` pass (and `pnpm build` if `web/` changed).
+2. `api-engineer` for the API contracts, routes, services and OpenAPI, in parallel with `test-engineer` once contracts are agreed.
+3. `web-engineer` in parallel once the zod contracts in `src/schemas/` are settled.
+4. The main agent integrates the work until `pnpm typecheck && pnpm lint && pnpm test` pass (run `pnpm build` first if `web/` changed).
 5. `code-reviewer` and `docs-writer` **in parallel**.
 6. Apply the fixes, then commit.
 
-Run agents in parallel only when their file ownership doesn't overlap. To split one area across several `api-engineer` instances, give each one an explicit list of files.
+Run agents in parallel only when their file ownership doesn't overlap. To split one area across several agents, give each one an explicit list of files.
 
 ## Roadmap
 
