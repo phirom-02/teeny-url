@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-teeny}
       POSTGRES_DB: ${POSTGRES_DB:-teeny_url}
     ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432" # localhost only
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - teeny_url_pgdata:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -17,7 +17,19 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
-
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: teeny-url-migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-teeny}:${POSTGRES_PASSWORD:-teeny}@postgres:5432/${POSTGRES_DB:-teeny_url}
+    command: ["node", "src/db/migrate.ts"]
   app:
     build:
       context: .
@@ -28,13 +40,28 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
-      NODE_ENV: production
       PORT: 3000
-      BASE_URL: http://localhost:8080
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TRUST_PROXY: ${TRUST_PROXY:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-teeny}:${POSTGRES_PASSWORD:-teeny}@postgres:5432/${POSTGRES_DB:-teeny_url}
     ports:
-      - "127.0.0.1:3000:3000" # localhost only (for reverse proxy)
+      - "127.0.0.1:${APP_PORT:-3000}:3000" # localhost only (for reverse proxy)
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
 volumes:
   teeny_url_pgdata:

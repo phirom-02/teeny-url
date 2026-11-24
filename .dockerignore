@@ -5,6 +5,9 @@ node_modules
 # Build outputs (rebuilt cleanly inside Docker)
 dist
 **/dist
+web/dist
+tests/
+skills/
 
 # Environment & secrets
 .env
@@ -28,3 +31,5 @@ coverage
 **/*.test.ts
 **/*.spec.ts
 *.md
+.agentic-workflows/
+.claude/

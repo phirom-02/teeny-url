@@ -1,40 +1,38 @@
 import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { RequestHandler } from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import supertest from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.ts';
+import { SESSION_COOKIE, SESSION_MAX_AGE_S } from '../src/lib/cookies.ts';
+import { createUiHandler } from '../src/middleware/ui-static.ts';
+import { MeResponse } from '../src/schemas/keys.ts';
 import { type Link, LinkList } from '../src/schemas/links.ts';
 import { revokeApiKey } from '../src/services/api-keys.service.ts';
 import { type AuthHeaders, api, BROWSER_ACCEPT, createTestKey, expectError } from './helpers.ts';
 
 /**
- * End to end against the REAL SvelteKit build (`web/build`, adapter-node) mounted in `createApp`:
- * the session hook, cookies, form actions, CSRF and CSP all run for real. The UI's server code calls
- * the API back over HTTP (`API_ORIGIN`), so the app listens on a real loopback port.
- *
- * Assertions stick to behaviour (statuses, headers, cookies, presence of data) — not markup.
+ * End to end against the REAL built React SPA (`web/dist`) mounted in `createApp` via
+ * `createUiHandler`: static asset serving, SPA fallback status codes, strict UI CSP, browser
+ * session cookies (`POST`/`DELETE /api/session`), cookie-authenticated API calls, and same-origin
+ * CSRF protection all run for real over HTTP.
  */
 
-const HANDLER_PATH = fileURLToPath(new URL('../web/build/handler.js', import.meta.url));
-const BUILT = existsSync(HANDLER_PATH);
+const DIST_DIR = fileURLToPath(new URL('../web/dist', import.meta.url));
+const BUILT = existsSync(path.join(DIST_DIR, 'index.html'));
 
 if (!BUILT) {
-  // Not console.warn: vitest hides console output from files whose tests were all skipped.
-  process.stderr.write('[web.e2e] skipped: web/build is missing — run `pnpm build` first\n');
+  process.stderr.write('[web.e2e] skipped: web/dist is missing — run `pnpm build` first\n');
 }
 
-const SESSION_COOKIE = 'teeny_key';
-const THIRTY_DAYS_S = 60 * 60 * 24 * 30;
 const KEY_NAME = 'E2E Browser Key';
 const TARGET = 'https://example.com/e2e/landing?from=teeny';
 const EVIL_ORIGIN = 'https://evil.example';
 
 interface ParsedCookie {
   value: string;
-  /** Attribute names lowercased; flag attributes (`HttpOnly`) map to `true`. */
   attributes: Map<string, string | true>;
 }
 
@@ -55,7 +53,7 @@ function sessionCookie(res: supertest.Response): ParsedCookie | undefined {
   return { value: decodeURIComponent(pair.slice(SESSION_COOKIE.length + 1)), attributes };
 }
 
-/** Asserts the response deletes the session cookie (on the path it was set with). */
+/** Asserts the response deletes the session cookie on `Path=/`. */
 function expectSessionCleared(res: supertest.Response) {
   const cookie = sessionCookie(res);
   expect(cookie, `expected a Set-Cookie clearing ${SESSION_COOKIE}`).toBeDefined();
@@ -66,24 +64,12 @@ function expectSessionCleared(res: supertest.Response) {
   const expired =
     maxAge === '0' || (typeof expires === 'string' && Date.parse(expires) < Date.now());
   expect(expired, `cookie is not expired: ${JSON.stringify([...cookie.attributes])}`).toBe(true);
-  // A deletion only replaces the original cookie if it targets the same path.
   expect(cookie.attributes.get('path')).toBe('/');
 }
 
-/** `script-src` of a Content-Security-Policy header. */
-function scriptSrc(csp: string): string {
-  return (
-    csp
-      .split(';')
-      .map((d) => d.trim())
-      .find((d) => d.startsWith('script-src ')) ?? ''
-  );
-}
-
-/** Asserts a body never contains the plaintext key — not whole, nor its secret part. */
+/** Asserts a body never contains the plaintext key — neither whole nor its secret suffix. */
 function expectNoKey(body: string, key: string) {
   expect(body.includes(key), 'the plaintext API key leaked into the response').toBe(false);
-  // The 12-character display prefix (`tny_AbCd1234`) may be shown; what follows must never be.
   expect(body.includes(key.slice(12)), 'the secret part of the API key leaked').toBe(false);
 }
 
@@ -95,28 +81,14 @@ async function linksOf(auth: AuthHeaders): Promise<Link[]> {
 }
 
 describe.skipIf(!BUILT)(
-  BUILT ? 'web UI end to end (real SvelteKit build)' : 'web UI end to end — run `pnpm build`',
+  BUILT ? 'web UI end to end (real React build)' : 'web UI end to end — run `pnpm build`',
   { timeout: 20_000 },
   () => {
     let server: Server | undefined;
-    let svelteKit: RequestHandler | undefined;
     let origin = '';
 
-    const UI_ENV = ['API_ORIGIN', 'PROTOCOL_HEADER', 'ADDRESS_HEADER', 'XFF_DEPTH'] as const;
-    const savedEnv = new Map(UI_ENV.map((name) => [name, process.env[name]]));
-
     beforeAll(async () => {
-      // The handler is bound late: SvelteKit snapshots process.env when its module loads, and
-      // API_ORIGIN must point at this server's port, known only once it listens.
-      const app = createApp({
-        uiHandler: (req, res, next) => {
-          if (!svelteKit) {
-            next(new Error('SvelteKit handler not loaded'));
-            return;
-          }
-          svelteKit(req, res, next);
-        },
-      });
+      const app = createApp({ uiHandler: createUiHandler(DIST_DIR) });
       const listening = createServer(app);
       server = listening;
       await new Promise<void>((resolve, reject) => {
@@ -125,403 +97,301 @@ describe.skipIf(!BUILT)(
       });
       const { port } = listening.address() as AddressInfo;
       origin = `http://127.0.0.1:${port}`;
-
-      // As src/server.ts configures adapter-node.
-      process.env.API_ORIGIN = origin;
-      process.env.PROTOCOL_HEADER = 'x-forwarded-proto';
-      process.env.ADDRESS_HEADER = 'x-forwarded-for';
-      process.env.XFF_DEPTH = '1';
-
-      const mod = (await import(pathToFileURL(HANDLER_PATH).href)) as { handler: RequestHandler };
-      svelteKit = mod.handler;
-    }, 60_000);
-
-    afterAll(async () => {
-      if (server) {
-        const closing = server;
-        await new Promise<void>((resolve) => {
-          closing.close(() => resolve());
-          closing.closeAllConnections();
-        });
-      }
-      for (const [name, value] of savedEnv) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
     });
 
-    /** Over real HTTP: the UI calls the API back at the same origin. */
+    afterAll(async () => {
+      if (!server) return;
+      const closing = server;
+      await new Promise<void>((resolve) => {
+        closing.close(() => resolve());
+        closing.closeAllConnections();
+      });
+    });
+
     function http() {
       return supertest(origin);
     }
 
-    /** A browser page navigation, optionally signed in with `key`. */
-    function browse(path: string, key?: string) {
-      const req = http().get(path).set('Accept', BROWSER_ACCEPT);
+    function browse(routePath: string, key?: string) {
+      const req = http().get(routePath).set('Accept', BROWSER_ACCEPT);
       return key === undefined ? req : req.set('Cookie', `${SESSION_COOKIE}=${key}`);
     }
 
-    interface FormPostOptions {
+    interface SessionRequestOptions {
       key?: string;
-      /** `null` sends no `Origin` header; default: this server's own origin. */
+      /** `null` omits the `Origin` header; default is this server's own origin. */
       origin?: string | null;
-      /** `html` = a plain form post; `json` = a SvelteKit-enhanced one. */
-      accept?: 'html' | 'json';
     }
 
-    /** A form POST as a browser sends it (urlencoded), by default same-origin and plain. */
-    function formPost(path: string, fields: Record<string, string>, opts: FormPostOptions = {}) {
+    function cookiePost(routePath: string, body: unknown, opts: SessionRequestOptions = {}) {
       let req = http()
-        .post(path)
-        .set('Accept', opts.accept === 'json' ? 'application/json' : BROWSER_ACCEPT)
-        .type('form')
-        .send(new URLSearchParams(fields).toString());
+        .post(routePath)
+        .send(body as object);
       const from = opts.origin === undefined ? origin : opts.origin;
       if (from !== null) req = req.set('Origin', from);
-      if (opts.accept === 'json') req = req.set('x-sveltekit-action', 'true');
       if (opts.key !== undefined) req = req.set('Cookie', `${SESSION_COOKIE}=${opts.key}`);
       return req;
     }
 
-    describe('signing in', () => {
-      it('GET / signed out → 303 to /login', async () => {
-        const res = await browse('/');
+    function cookieDelete(routePath: string, opts: SessionRequestOptions = {}) {
+      let req = http().delete(routePath);
+      const from = opts.origin === undefined ? origin : opts.origin;
+      if (from !== null) req = req.set('Origin', from);
+      if (opts.key !== undefined) req = req.set('Cookie', `${SESSION_COOKIE}=${opts.key}`);
+      return req;
+    }
 
-        expect(res.status).toBe(303);
-        expect(res.headers.location).toBe('/login');
-      });
-
-      it('GET /login signed out → 200 HTML', async () => {
-        const res = await browse('/login');
+    describe('SPA routes & static assets', () => {
+      it.each(['/', '/login'])('GET %s → 200 HTML with strict UI CSP', async (routePath) => {
+        const res = await browse(routePath);
 
         expect(res.status).toBe(200);
         expect(res.headers['content-type']).toMatch(/text\/html/);
-        expect(sessionCookie(res)).toBeUndefined();
+        expect(res.headers['cache-control']).toMatch(/no-store/);
+        expect(res.text).toContain('<div id="root"></div>');
+        const csp = String(res.headers['content-security-policy'] ?? '');
+        expect(csp).toContain("script-src 'self'");
+        expect(csp).toContain("style-src 'self'");
+        expect(csp).toContain("frame-ancestors 'none'");
+        expect(csp).not.toContain('unsafe-inline');
+        expect(csp).not.toContain("default-src 'none'");
       });
 
-      it('a valid key → 303 to / with an httpOnly, SameSite=Lax, 30-day session cookie', async () => {
-        const { key } = await createTestKey(KEY_NAME);
+      it('serves built JS/CSS assets with immutable cache headers', async () => {
+        const html = await browse('/');
+        const assetMatch = /src="(\/assets\/[^"]+\.js)"/.exec(html.text);
+        expect(assetMatch?.[1], 'expected bundled JS asset in index.html').toBeDefined();
 
-        const res = await formPost('/login', { key });
+        const asset = await http().get(assetMatch?.[1] ?? '');
+        expect(asset.status).toBe(200);
+        expect(asset.headers['cache-control']).toMatch(/immutable/);
+      });
 
-        expect(res.status).toBe(303);
-        expect(res.headers.location).toBe('/');
+      it('serves static files (/robots.txt, /favicon.svg)', async () => {
+        const robots = await http().get('/robots.txt');
+        expect(robots.status).toBe(200);
+        expect(robots.text).toContain('User-agent:');
+
+        const favicon = await http().get('/favicon.svg');
+        expect(favicon.status).toBe(200);
+        expect(favicon.headers['content-type']).toMatch(/image\/svg\+xml/);
+      });
+    });
+
+    describe('browser session lifecycle (POST / DELETE /api/session)', () => {
+      it('valid key → 200 MeResponse with httpOnly, SameSite=Lax, 30-day session cookie', async () => {
+        const { key, apiKey } = await createTestKey(KEY_NAME);
+
+        const res = await cookiePost('/api/session', { key });
+
+        expect(res.status).toBe(200);
+        expect(MeResponse.parse(res.body)).toEqual({ name: KEY_NAME, prefix: apiKey.prefix });
+        expectNoKey(res.text, key);
+        expect(res.headers['cache-control']).toMatch(/private/);
+        expect(res.headers['cache-control']).toMatch(/no-store/);
+
         const cookie = sessionCookie(res);
         expect(cookie, 'expected Set-Cookie: teeny_key=…').toBeDefined();
         expect(cookie?.value).toBe(key);
         expect(cookie?.attributes.get('httponly')).toBe(true);
         expect(String(cookie?.attributes.get('samesite')).toLowerCase()).toBe('lax');
         expect(cookie?.attributes.get('path')).toBe('/');
-        expect(cookie?.attributes.get('max-age')).toBe(String(THIRTY_DAYS_S));
-        // Plain http: a `Secure` cookie would never be sent back.
+        expect(cookie?.attributes.get('max-age')).toBe(String(SESSION_MAX_AGE_S));
         expect(cookie?.attributes.has('secure')).toBe(false);
       });
 
-      it('surrounding whitespace in the pasted key is ignored', async () => {
+      it('ignores surrounding whitespace in the pasted key', async () => {
         const { key } = await createTestKey(KEY_NAME);
 
-        const res = await formPost('/login', { key: `  ${key}\n` });
+        const res = await cookiePost('/api/session', { key: `  ${key}\n` });
 
-        expect(res.status).toBe(303);
+        expect(res.status).toBe(200);
         expect(sessionCookie(res)?.value).toBe(key);
       });
 
-      it('an unknown key → 400, no session cookie, and the key is not echoed back', async () => {
+      it('unknown key → 401 UNAUTHORIZED, no cookie, and key is never echoed', async () => {
         await createTestKey(KEY_NAME);
         const unknown = `tny_${'A'.repeat(32)}`;
 
-        const res = await formPost('/login', { key: unknown });
+        const res = await cookiePost('/api/session', { key: unknown });
 
-        expect(res.status).toBe(400);
-        expect(res.headers['content-type']).toMatch(/text\/html/);
+        expectError(res, 401, 'UNAUTHORIZED');
         expect(sessionCookie(res)).toBeUndefined();
         expect(res.text).not.toContain(unknown);
       });
 
-      it('a revoked key cannot sign in → 400, no session cookie', async () => {
+      it('revoked key → 401 UNAUTHORIZED, no cookie', async () => {
         const { key, apiKey } = await createTestKey(KEY_NAME);
         await revokeApiKey(apiKey.id);
 
-        const res = await formPost('/login', { key });
+        const res = await cookiePost('/api/session', { key });
 
-        expect(res.status).toBe(400);
+        expectError(res, 401, 'UNAUTHORIZED');
         expect(sessionCookie(res)).toBeUndefined();
         expectNoKey(res.text, key);
       });
 
-      it('an empty key → 400, no session cookie', async () => {
-        const res = await formPost('/login', { key: '' });
+      it('empty key → 400 VALIDATION_ERROR, no cookie', async () => {
+        const res = await cookiePost('/api/session', { key: '   ' });
 
-        expect(res.status).toBe(400);
+        expectError(res, 400, 'VALIDATION_ERROR');
         expect(sessionCookie(res)).toBeUndefined();
       });
 
-      it('GET /login signed in → 303 to /', async () => {
+      it('DELETE /api/session → 204 and clears the session cookie', async () => {
         const { key } = await createTestKey(KEY_NAME);
 
-        const res = await browse('/login', key);
+        const res = await cookieDelete('/api/session', { key });
 
-        expect(res.status).toBe(303);
-        expect(res.headers.location).toBe('/');
+        expect(res.status).toBe(204);
+        expectSessionCleared(res);
       });
     });
 
-    describe('CSRF: SvelteKit rejects form posts not from its own origin', () => {
-      it.each(['/', '/login', '/logout'])('cross-origin POST %s → 403', async (path) => {
-        const { key, auth } = await createTestKey(KEY_NAME);
-
-        const res = await formPost(path, { key, url: TARGET }, { key, origin: EVIL_ORIGIN });
-
-        expect(res.status).toBe(403);
-        // The action never ran: no session set or cleared, no link created.
-        expect(sessionCookie(res)).toBeUndefined();
-        expect(await linksOf(auth)).toHaveLength(0);
-      });
-
-      it.each(['/', '/login', '/logout'])(
-        'POST %s without an Origin header → 403',
-        async (path) => {
-          const { key, auth } = await createTestKey(KEY_NAME);
-
-          const res = await formPost(path, { key, url: TARGET }, { key, origin: null });
-
-          expect(res.status).toBe(403);
-          expect(sessionCookie(res)).toBeUndefined();
-          expect(await linksOf(auth)).toHaveLength(0);
-        },
-      );
-
-      it('an enhanced (Accept: application/json) cross-origin POST / → 403', async () => {
-        const { key, auth } = await createTestKey(KEY_NAME);
-
-        const res = await formPost(
-          '/',
-          { url: TARGET },
-          { key, origin: EVIL_ORIGIN, accept: 'json' },
-        );
-
-        expect(res.status).toBe(403);
-        expect(await linksOf(auth)).toHaveLength(0);
-      });
-    });
-
-    describe('signed in', () => {
-      it('GET / → 200 HTML with the key name, never the key, and not cacheable', async () => {
+    describe('CSRF protection on session & cookie-authenticated mutations', () => {
+      it('rejects cross-origin POST /api/session with 403 FORBIDDEN', async () => {
         const { key } = await createTestKey(KEY_NAME);
 
-        const res = await browse('/', key);
+        const res = await cookiePost('/api/session', { key }, { origin: EVIL_ORIGIN });
 
-        expect(res.status).toBe(200);
-        expect(res.headers['content-type']).toMatch(/text\/html/);
-        expect(res.text).toContain(KEY_NAME);
-        expectNoKey(res.text, key);
-        expect(res.headers['cache-control']).toMatch(/private/);
-        expect(res.headers['cache-control']).toMatch(/no-store/);
-        // A valid session is left alone.
+        expectError(res, 403, 'FORBIDDEN');
         expect(sessionCookie(res)).toBeUndefined();
       });
 
-      it("GET / lists the key's recent links", async () => {
+      it('rejects POST /api/session without an Origin header with 403 FORBIDDEN', async () => {
+        const { key } = await createTestKey(KEY_NAME);
+
+        const res = await cookiePost('/api/session', { key }, { origin: null });
+
+        expectError(res, 403, 'FORBIDDEN');
+        expect(sessionCookie(res)).toBeUndefined();
+      });
+
+      it('rejects cross-origin DELETE /api/session with 403 FORBIDDEN', async () => {
+        const { key } = await createTestKey(KEY_NAME);
+
+        const res = await cookieDelete('/api/session', { key, origin: EVIL_ORIGIN });
+
+        expectError(res, 403, 'FORBIDDEN');
+        expect(sessionCookie(res)).toBeUndefined();
+      });
+
+      it('rejects cross-origin cookie-authenticated POST /api/links with 403 FORBIDDEN', async () => {
+        const { key, auth } = await createTestKey(KEY_NAME);
+
+        const res = await cookiePost('/api/links', { url: TARGET }, { key, origin: EVIL_ORIGIN });
+
+        expectError(res, 403, 'FORBIDDEN');
+        expect(await linksOf(auth)).toHaveLength(0);
+      });
+
+      it('rejects cookie-authenticated POST /api/links without Origin with 403 FORBIDDEN', async () => {
+        const { key, auth } = await createTestKey(KEY_NAME);
+
+        const res = await cookiePost('/api/links', { url: TARGET }, { key, origin: null });
+
+        expectError(res, 403, 'FORBIDDEN');
+        expect(await linksOf(auth)).toHaveLength(0);
+      });
+
+      it('rejects cross-origin cookie-authenticated DELETE /api/links/:code with 403 FORBIDDEN', async () => {
         const { key, auth } = await createTestKey(KEY_NAME);
         const created = await api().post('/api/links').set(auth).send({ url: TARGET });
         expect(created.status).toBe(201);
 
-        const res = await browse('/', key);
+        const res = await cookieDelete(`/api/links/${created.body.code}`, {
+          key,
+          origin: EVIL_ORIGIN,
+        });
+
+        expectError(res, 403, 'FORBIDDEN');
+        expect(await linksOf(auth)).toHaveLength(1);
+      });
+    });
+
+    describe('cookie-authenticated API flows', () => {
+      it('GET /api/me with valid session cookie → 200 MeResponse, never leaks key, not cacheable', async () => {
+        const { key, apiKey } = await createTestKey(KEY_NAME);
+
+        const res = await http().get('/api/me').set('Cookie', `${SESSION_COOKIE}=${key}`);
 
         expect(res.status).toBe(200);
-        expect(res.text).toContain(created.body.code);
+        expect(MeResponse.parse(res.body)).toEqual({ name: KEY_NAME, prefix: apiKey.prefix });
+        expectNoKey(res.text, key);
+        expect(res.headers['cache-control']).toMatch(/private/);
+        expect(res.headers['cache-control']).toMatch(/no-store/);
       });
 
-      it('GET /__data.json → the key name, never the key', async () => {
-        const { key } = await createTestKey(KEY_NAME);
+      it('same-origin cookie-authenticated shorten + list works end to end', async () => {
+        const { key, auth } = await createTestKey(KEY_NAME);
 
-        const res = await http()
-          .get('/__data.json')
-          .set('Accept', '*/*')
+        const created = await cookiePost(
+          '/api/links',
+          { url: TARGET, alias: 'e2e-react' },
+          { key },
+        );
+
+        expect(created.status).toBe(201);
+        expect(created.body.code).toBe('e2e-react');
+        expectNoKey(created.text, key);
+
+        const listed = await http()
+          .get('/api/links?limit=5')
           .set('Cookie', `${SESSION_COOKIE}=${key}`);
 
-        expect(res.status).toBe(200);
-        expect(res.headers['content-type']).toMatch(/application\/json/);
-        expect(res.text).toContain(KEY_NAME);
-        expectNoKey(res.text, key);
-      });
-
-      it('enhanced shorten (Accept: application/json) → action JSON with the code, never the key', async () => {
-        const { key, auth } = await createTestKey(KEY_NAME);
-
-        const res = await formPost('/', { url: TARGET, alias: '' }, { key, accept: 'json' });
-
-        expect(res.status).toBe(200);
-        expect(res.headers['content-type']).toMatch(/application\/json/);
-        expect(res.body.type).toBe('success');
-        const [link] = await linksOf(auth);
-        expect(link?.targetUrl).toBe(TARGET);
-        expect(res.text).toContain(link?.code);
-        expectNoKey(res.text, key);
-      });
-
-      it('plain-form shorten → 200 HTML showing the new short link', async () => {
-        const { key, auth } = await createTestKey(KEY_NAME);
-
-        const res = await formPost('/', { url: TARGET, alias: '' }, { key });
-
-        expect(res.status).toBe(200);
-        expect(res.headers['content-type']).toMatch(/text\/html/);
-        const links = await linksOf(auth);
-        expect(links).toHaveLength(1);
-        expect(links[0]?.targetUrl).toBe(TARGET);
-        expect(res.text).toContain(links[0]?.shortUrl);
-        expectNoKey(res.text, key);
-      });
-
-      it('plain-form shorten with an alias → 200 and the alias link is created', async () => {
-        const { key, auth } = await createTestKey(KEY_NAME);
-
-        const res = await formPost('/', { url: TARGET, alias: 'e2e-promo' }, { key });
-
-        expect(res.status).toBe(200);
-        const links = await linksOf(auth);
-        expect(links.map((l) => l.code)).toEqual(['e2e-promo']);
-        expect(res.text).toContain(links[0]?.shortUrl);
-      });
-
-      it('a duplicate alias → 409 with the "already taken" message', async () => {
-        const { key, auth } = await createTestKey(KEY_NAME);
-        const first = await api()
-          .post('/api/links')
-          .set(auth)
-          .send({ url: TARGET, alias: 'e2e-dupe' });
-        expect(first.status).toBe(201);
-
-        const res = await formPost('/', { url: TARGET, alias: 'e2e-dupe' }, { key });
-
-        expect(res.status).toBe(409);
-        expect(res.headers['content-type']).toMatch(/text\/html/);
-        expect(res.text).toMatch(/already taken/i);
+        expect(listed.status).toBe(200);
+        expect(LinkList.parse(listed.body).data.map((l) => l.code)).toEqual(['e2e-react']);
         expect(await linksOf(auth)).toHaveLength(1);
       });
 
-      it('an invalid URL → 400 and nothing is created', async () => {
+      it('duplicate alias via cookie → 409 ALIAS_TAKEN', async () => {
         const { key, auth } = await createTestKey(KEY_NAME);
+        await api().post('/api/links').set(auth).send({ url: TARGET, alias: 'e2e-dupe' });
 
-        const res = await formPost('/', { url: 'not a url', alias: '' }, { key });
+        const res = await cookiePost('/api/links', { url: TARGET, alias: 'e2e-dupe' }, { key });
 
-        expect(res.status).toBe(400);
-        expect(res.headers['content-type']).toMatch(/text\/html/);
-        expect(await linksOf(auth)).toHaveLength(0);
+        expectError(res, 409, 'ALIAS_TAKEN');
+        expect(await linksOf(auth)).toHaveLength(1);
       });
 
-      it('a missing URL → 400 and nothing is created', async () => {
-        const { key, auth } = await createTestKey(KEY_NAME);
-
-        const res = await formPost('/', { url: '   ', alias: '' }, { key });
-
-        expect(res.status).toBe(400);
-        expect(await linksOf(auth)).toHaveLength(0);
-      });
-
-      it('a revoked key → GET / is 303 to /login and the cookie is cleared', async () => {
+      it('revoked key cookie → 401 UNAUTHORIZED and clears the cookie', async () => {
         const { key, apiKey } = await createTestKey(KEY_NAME);
         await revokeApiKey(apiKey.id);
 
-        const res = await browse('/', key);
+        const res = await http().get('/api/me').set('Cookie', `${SESSION_COOKIE}=${key}`);
 
-        expect(res.status).toBe(303);
-        expect(res.headers.location).toBe('/login');
+        expectError(res, 401, 'UNAUTHORIZED');
         expectSessionCleared(res);
       });
 
-      it('a key revoked after the page loaded → shorten is 303 to /login, cookie cleared', async () => {
-        const { key, apiKey } = await createTestKey(KEY_NAME);
-        expect((await browse('/', key)).status).toBe(200);
-        await revokeApiKey(apiKey.id);
-
-        const res = await formPost('/', { url: TARGET, alias: '' }, { key });
-
-        expect(res.status).toBe(303);
-        expect(res.headers.location).toBe('/login');
-        expectSessionCleared(res);
-      });
-
-      it('a malformed session cookie is cleared → GET / is 303 to /login', async () => {
+      it('malformed session cookie → 401 UNAUTHORIZED and clears the cookie', async () => {
         const res = await http()
-          .get('/')
-          .set('Accept', BROWSER_ACCEPT)
+          .get('/api/me')
           .set('Cookie', `${SESSION_COOKIE}=${encodeURIComponent('bad key\twith spaces')}`);
 
-        expect(res.status).toBe(303);
-        expect(res.headers.location).toBe('/login');
-        expectSessionCleared(res);
-      });
-
-      it('logout (same-origin form POST) → 303 to /login and the cookie is cleared', async () => {
-        const { key } = await createTestKey(KEY_NAME);
-
-        const res = await formPost('/logout', {}, { key });
-
-        expect(res.status).toBe(303);
-        expect(res.headers.location).toBe('/login');
+        expectError(res, 401, 'UNAUTHORIZED');
         expectSessionCleared(res);
       });
     });
 
-    describe('security headers', () => {
-      it('UI pages carry SvelteKit’s nonce-based CSP, not the strict JSON one', async () => {
-        const res = await browse('/login');
+    describe('security headers & unknown short codes', () => {
+      const UNKNOWN_CODE = 'zzzzzzz';
 
-        expect(res.status).toBe(200);
-        const csp = String(res.headers['content-security-policy'] ?? '');
-        expect(csp).not.toContain("default-src 'none'");
-        expect(scriptSrc(csp)).toMatch(/'self'/);
-        const nonce = /'nonce-([^']+)'/.exec(scriptSrc(csp))?.[1];
-        expect(nonce, `no nonce in script-src: ${csp}`).toBeDefined();
-        // The page's own inline boot script carries that nonce, so the policy lets it run.
-        expect(res.text).toContain(`nonce="${nonce}"`);
-        expect(csp).toContain("frame-ancestors 'none'");
-      });
-
-      it('each UI page gets a fresh nonce', async () => {
-        const nonceOf = async () => {
-          const res = await browse('/login');
-          return /'nonce-([^']+)'/.exec(String(res.headers['content-security-policy']))?.[1];
-        };
-
-        const [a, b] = [await nonceOf(), await nonceOf()];
-
-        expect(a).toBeDefined();
-        expect(a).not.toBe(b);
-      });
-
-      it('signed-in pages carry the nonce-based CSP too', async () => {
-        const { key } = await createTestKey(KEY_NAME);
-
-        const res = await browse('/', key);
-
-        expect(res.status).toBe(200);
-        const csp = String(res.headers['content-security-policy'] ?? '');
-        expect(scriptSrc(csp)).toMatch(/'nonce-[^']+'/);
-        expect(csp).not.toContain("default-src 'none'");
-      });
-
-      it("JSON /api keeps the strict default-src 'none' CSP", async () => {
+      it('JSON /api keeps the strict default-src none CSP', async () => {
         const res = await http().get('/api');
 
         expect(res.status).toBe(200);
         expect(res.headers['content-type']).toMatch(/application\/json/);
         expect(res.headers['content-security-policy']).toContain("default-src 'none'");
       });
-    });
 
-    describe('unknown short codes', () => {
-      const UNKNOWN_CODE = 'zzzzzzz';
-
-      it("a browser gets the UI's HTML 404 page", async () => {
+      it('a browser requesting an unknown short code gets the UI HTML with HTTP 404', async () => {
         const res = await browse(`/${UNKNOWN_CODE}`);
 
         expect(res.status).toBe(404);
         expect(res.headers['content-type']).toMatch(/text\/html/);
-        // Rendered by SvelteKit (its CSP), not Express's JSON 404.
-        expect(scriptSrc(String(res.headers['content-security-policy'] ?? ''))).toMatch(/'nonce-/);
+        expect(res.text).toContain('<div id="root"></div>');
+        expect(res.headers['content-security-policy']).toContain("script-src 'self'");
       });
 
       it.each([
