@@ -5,8 +5,7 @@ node_modules
 # Build outputs (rebuilt cleanly inside Docker)
 dist
 **/dist
-web/build
-web/.svelte-kit
+web/dist
 tests/
 skills/
 

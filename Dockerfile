@@ -2,7 +2,7 @@
 FROM node:24-slim AS builder
 WORKDIR /app
 
-# Enable pnpm
+# Enable pinned pnpm version
 RUN corepack enable && corepack prepare pnpm@12.5.1 --activate
 
 # Copy workspace manifests first for dependency layer caching
@@ -21,8 +21,8 @@ FROM node:24-slim AS production
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Enable pnpm to install root production dependencies
-RUN npm install -g pnpm
+# Enable pinned pnpm version to install root production dependencies
+RUN corepack enable && corepack prepare pnpm@12.5.1 --activate
 
 # Copy root manifests and install only API production dependencies
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -34,8 +34,8 @@ COPY --from=builder --chown=node:node /app/scripts ./scripts
 # Copy Drizzle SQL migrations
 COPY --from=builder --chown=node:node /app/drizzle ./drizzle
 
-# Copy compiled SvelteKit frontend assets from builder stage
-COPY --from=builder --chown=node:node /app/web/build ./web/build
+# Copy compiled React frontend assets from builder stage
+COPY --from=builder --chown=node:node /app/web/dist ./web/dist
 
 # Switch to built-in non-root user
 USER node
