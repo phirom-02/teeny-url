@@ -1,0 +1,43 @@
+name: Deploy to VM
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy-uat:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, vm-debian]
+    environment:
+      name: uat
+      url: http://uat.teeny.local:8080
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy UAT Stack
+        run: |
+          docker compose -p teeny-uat --env-file /etc/teeny-url/uat.env up -d --build
+          docker compose -p teeny-uat ps
+
+  deploy-prd:
+    needs: deploy-uat
+    runs-on: [self-hosted, vm-debian]
+    environment:
+      name: prd
+      url: http://teeny.local:8080
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Backup PRD Database
+        run: |
+          mkdir -p ~/backups
+          docker exec teeny-prd-postgres pg_dump -U teeny_prd_user teeny_url_prd \
+            > ~/backups/prd-$(date +%Y%m%d-%H%M%S).sql
+
+      - name: Deploy PRD Stack
+        run: |
+          docker compose -p teeny-prd --env-file /etc/teeny-url/prd.env up -d --build
+          docker compose -p teeny-prd ps
