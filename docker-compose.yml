@@ -17,6 +17,24 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: teeny-url-rustfs
+    restart: unless-stopped
+    environment:
+      RUSTFS_ADDRESS: "0.0.0.0:9000"
+      RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_VOLUMES: "/data"
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-teeny}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-teeny}
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API (used by Nginx & uploads)
+      - "127.0.0.1:9001:9001"   # Web Console (access via SSH tunnel)
+    volumes:
+      - teeny_url_rustfs:/data
+
   migrate:
     build:
       context: .
@@ -30,6 +48,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-teeny}:${POSTGRES_PASSWORD:-teeny}@postgres:5432/${POSTGRES_DB:-teeny_url}
     command: ["node", "src/db/migrate.ts"]
+
   app:
     build:
       context: .
@@ -44,12 +63,13 @@ services:
         condition: service_completed_successfully
     environment:
       PORT: 3000
+      SERVE_UI: "false"         # <--- API + redirects only; RustFS serves React!
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TRUST_PROXY: ${TRUST_PROXY:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-teeny}:${POSTGRES_PASSWORD:-teeny}@postgres:5432/${POSTGRES_DB:-teeny_url}
     ports:
-      - "127.0.0.1:${APP_PORT:-3000}:3000" # localhost only (for reverse proxy)
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
     healthcheck:
       test:
         [
@@ -65,3 +85,4 @@ services:
 
 volumes:
   teeny_url_pgdata:
+  teeny_url_rustfs:
