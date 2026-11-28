@@ -1,21 +1,36 @@
-name: Deploy to VM
+name: Deploy
 
 on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [main]
+    branches: [develop, master]
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Environment to deploy"
+        required: true
+        type: choice
+        options:
+          - uat
+          - prd
 
 jobs:
   deploy-uat:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'uat') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'develop')
     runs-on: [self-hosted, vm-debian]
     environment:
       name: uat
       url: http://uat.teeny.local:8080
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'develop' }}
 
       - name: Deploy UAT Stack
         run: |
@@ -23,13 +38,20 @@ jobs:
           docker compose -p teeny-uat ps
 
   deploy-prd:
-    needs: deploy-uat
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'prd') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master')
     runs-on: [self-hosted, vm-debian]
     environment:
       name: prd
       url: http://teeny.local:8080
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'master' }}
 
       - name: Backup PRD Database
         run: |
